@@ -1,15 +1,7 @@
-export type ScanStatus = 'valid' | 'duplicate' | 'wrong_model';
-
-export interface ScanRecord {
-  id: number;
+export interface ImeiRecord {
+  id: string;
   code: string;
-  targetModel: string;
-  timestamp: string;
-  status: ScanStatus;
-  rawTimestamp: number; // For sorting if needed
+  timestamp: Date;
 }
 
-export interface AppSettings {
-  targetModel: string;
-  soundEnabled: boolean;
-}
+export type ScanStatus = 'idle' | 'success' | 'error';

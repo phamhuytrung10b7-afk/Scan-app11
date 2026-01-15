@@ -1,5 +1,5 @@
 {
-  "name": "ProScan - Manufacturing Scanner",
-  "description": "A robust barcode scanning utility for manufacturing environments with model validation, duplicate checking, and CSV export.",
+  "name": "IMEI Scanner Pro",
+  "description": "Ứng dụng quét mã IMEI chuyên nghiệp với tính năng phát hiện trùng lặp và xuất báo cáo Excel.",
   "requestFramePermissions": []
 }
