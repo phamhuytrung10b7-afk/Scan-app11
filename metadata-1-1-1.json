@@ -1,0 +1,5 @@
+{
+  "name": "ProScan Manufacturing Tracker",
+  "description": "Industrial barcode scanning application for manufacturing lines with employee tracking, model validation, and duplicate prevention.",
+  "requestFramePermissions": []
+}

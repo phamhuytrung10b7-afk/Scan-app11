@@ -1,0 +1,5 @@
+{
+  "name": "App Scan con 2222",
+  "description": "A robust barcode scanning utility for manufacturing environments with model validation, duplicate checking, and CSV export.",
+  "requestFramePermissions": []
+}

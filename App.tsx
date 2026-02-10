@@ -1,380 +1,853 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { 
-  FileSpreadsheet, 
-  Trash2, 
-  Smartphone, 
-  ShieldCheck, 
-  Layers, 
-  Scan, 
-  XCircle, 
-  CheckCircle2, 
-  FileText 
-} from 'lucide-react';
-import * as XLSX from 'xlsx';
 
-// --- TYPES ---
-interface ImeiRecord {
-  id: string;
-  code: string;
-  timestamp: Date;
-}
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { Download, ScanLine, Users, CheckCircle, RefreshCw, Box, Settings, Layers, Edit, XCircle, Activity, List, Tag, Maximize, Minimize, AlertCircle, ChevronRight, PenTool, AlertTriangle, Clock } from 'lucide-react';
+import { format } from 'date-fns';
+import { utils, writeFile } from 'xlsx';
 
-type ScanStatus = 'idle' | 'success' | 'error';
+import { ScanRecord, ErrorState, DEFAULT_PROCESS_STAGES, Stage } from './types';
+import { Button } from './Button';
+import { ErrorModal } from './ErrorModal';
+import { StatCard } from './StatCard';
+import { StageSettingsModal } from './StageSettingsModal';
 
-// --- UTILS: SOUND ---
-const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-
-const playSuccessSound = () => {
-  if (audioContext.state === 'suspended') {
-    audioContext.resume();
-  }
-  const oscillator = audioContext.createOscillator();
-  const gainNode = audioContext.createGain();
-
-  oscillator.connect(gainNode);
-  gainNode.connect(audioContext.destination);
-
-  oscillator.type = 'sine';
-  oscillator.frequency.setValueAtTime(880, audioContext.currentTime); // High pitch
-  gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+export default function App() {
+  // --- STATE WITH ROBUST PERSISTENCE ---
   
-  oscillator.start();
-  gainNode.gain.exponentialRampToValueAtTime(0.00001, audioContext.currentTime + 0.1);
-  oscillator.stop(audioContext.currentTime + 0.1);
-};
+  // 1. Configuration (Stages) - Never lost on simple reset
+  const [stages, setStages] = useState<Stage[]>(() => {
+    try {
+      const saved = localStorage.getItem('proscan_stages');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+            // Migration and data sanitization
+            if (parsed.length === 1) {
+                return [parsed[0], DEFAULT_PROCESS_STAGES[1]];
+            }
+            return parsed.map((s: any) => ({
+              ...s,
+              additionalFieldLabels: s.additionalFieldLabels ? [...s.additionalFieldLabels, ...Array(8).fill("")].slice(0, 8) : Array(8).fill(""),
+              additionalFieldDefaults: s.additionalFieldDefaults ? [...s.additionalFieldDefaults, ...Array(8).fill("")].slice(0, 8) : Array(8).fill(""),
+              additionalFieldValidationLists: s.additionalFieldValidationLists ? [...s.additionalFieldValidationLists, ...Array(8).fill("")].slice(0, 8) : Array(8).fill(""),
+              additionalFieldMins: s.additionalFieldMins ? [...s.additionalFieldMins, ...Array(8).fill("")].slice(0, 8) : Array(8).fill(""),
+              additionalFieldMaxs: s.additionalFieldMaxs ? [...s.additionalFieldMaxs, ...Array(8).fill("")].slice(0, 8) : Array(8).fill(""),
+              validationRules: s.validationRules || [],
+              statusLabels: s.statusLabels || { valid: "OK/ĐÃ SỬA", defect: "NG/TRẢ LẠI", error: "LỖI HỆ THỐNG" }
+            }));
+        }
+      }
+    } catch (e) {
+      console.error("Failed to load stages from storage", e);
+    }
+    return DEFAULT_PROCESS_STAGES;
+  });
 
-const playErrorSound = () => {
-  if (audioContext.state === 'suspended') {
-    audioContext.resume();
-  }
-  const oscillator = audioContext.createOscillator();
-  const gainNode = audioContext.createGain();
+  // 2. Employees - Persist per session/reset
+  const [stageEmployees, setStageEmployees] = useState<Record<number, string>>(() => {
+    try {
+      const saved = localStorage.getItem('proscan_employees');
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) { return {}; }
+  });
 
-  oscillator.connect(gainNode);
-  gainNode.connect(audioContext.destination);
+  // 3. Model Info
+  const [currentModel, setCurrentModel] = useState<string>(() => {
+    return localStorage.getItem('proscan_current_model') || '';
+  }); 
 
-  oscillator.type = 'sawtooth';
-  oscillator.frequency.setValueAtTime(150, audioContext.currentTime); // Low pitch
-  gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+  const [modelName, setModelName] = useState<string>(() => {
+    return localStorage.getItem('proscan_model_name') || '';
+  });
+  
+  // 4. App State
+  const [currentStage, setCurrentStage] = useState<number>(() => {
+    const saved = localStorage.getItem('proscan_active_stage');
+    return saved ? parseInt(saved) : 1;
+  });
 
-  oscillator.start();
-  gainNode.gain.exponentialRampToValueAtTime(0.00001, audioContext.currentTime + 0.3);
-  oscillator.stop(audioContext.currentTime + 0.3);
-};
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
-// --- UTILS: EXCEL ---
-const generateExcel = (records: ImeiRecord[]) => {
-  // Format data for Excel
-  const data = records.map((record, index) => ({
-    'STT': records.length - index,
-    'Mã IMEI': record.code,
-    'Thời gian quét': record.timestamp.toLocaleString('vi-VN')
-  }));
+  // 5. DATA (History & Progress)
+  const [history, setHistory] = useState<ScanRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem('proscan_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) { return []; }
+  });
 
-  // Create worksheet
-  const worksheet = XLSX.utils.json_to_sheet(data);
+  const [productProgress, setProductProgress] = useState<Record<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem('proscan_progress');
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) { return {}; }
+  });
 
-  // Set column widths
-  const wscols = [
-    { wch: 10 }, // STT
-    { wch: 25 }, // IMEI
-    { wch: 25 }  // Time
-  ];
-  worksheet['!cols'] = wscols;
+  const [productStatus, setProductStatus] = useState<Record<string, 'valid' | 'defect'>>(() => {
+    try {
+      const saved = localStorage.getItem('proscan_status');
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) { return {}; }
+  });
+  
+  // Inputs
+  const [employeeInput, setEmployeeInput] = useState('');
+  const [measurementValue, setMeasurementValue] = useState(''); 
+  const [productInput, setProductInput] = useState('');
+  const [additionalValues, setAdditionalValues] = useState<string[]>(Array(8).fill(""));
+  const [errorModal, setErrorModal] = useState<ErrorState>({ isOpen: false, message: '' });
 
-  // Create workbook
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Danh Sách IMEI");
+  // Refs
+  const employeeInputRef = useRef<HTMLInputElement>(null);
+  const measurementInputRef = useRef<HTMLInputElement>(null);
+  const productInputRef = useRef<HTMLInputElement>(null);
+  const modelNameRef = useRef<HTMLInputElement>(null);
+  const extraInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // Generate file
-  const dateStr = new Date().toISOString().slice(0,10);
-  XLSX.writeFile(workbook, `IMEI_List_${dateStr}.xlsx`);
-};
+  // Calculate stats for CURRENT stage
+  const validScanCount = history.filter(r => r.status === 'valid' && r.stage === currentStage).length;
+  const errorScanCount = history.filter(r => r.status === 'error' && r.stage === currentStage).length;
 
-// --- COMPONENTS ---
+  // Calculate pending inventory for stages > 1
+  const pendingCount = useMemo(() => {
+    if (currentStage === 1) return 0;
+    return Object.values(productProgress).filter(p => p === (currentStage - 1)).length;
+  }, [productProgress, currentStage]);
 
-const StatsCard: React.FC<{ count: number }> = ({ count }) => {
-  return (
-    <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex items-center justify-between">
-      <div>
-        <p className="text-sm font-medium text-slate-500">Tổng số lượng</p>
-        <h3 className="text-2xl font-bold text-slate-800">{count}</h3>
-      </div>
-      <div className="p-3 bg-blue-50 rounded-lg">
-        <Layers className="w-6 h-6 text-blue-600" />
-      </div>
-    </div>
-  );
-};
-
-const ScannerInput: React.FC<{
-  onScan: (code: string) => void;
-  status: ScanStatus;
-  errorMessage?: string | null;
-  onClearError: () => void;
-}> = ({ onScan, status, errorMessage, onClearError }) => {
-  const [inputValue, setInputValue] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
+  // --- IMMEDIATE PERSISTENCE EFFECTS (Save on Change) ---
+  useEffect(() => { localStorage.setItem('proscan_stages', JSON.stringify(stages)); }, [stages]);
+  useEffect(() => { localStorage.setItem('proscan_employees', JSON.stringify(stageEmployees)); }, [stageEmployees]);
+  useEffect(() => { localStorage.setItem('proscan_current_model', currentModel); }, [currentModel]);
+  useEffect(() => { localStorage.setItem('proscan_model_name', modelName); }, [modelName]);
+  useEffect(() => { localStorage.setItem('proscan_active_stage', currentStage.toString()); }, [currentStage]);
+  
+  // Heavy data saving
+  useEffect(() => { localStorage.setItem('proscan_history', JSON.stringify(history)); }, [history]);
+  useEffect(() => { localStorage.setItem('proscan_progress', JSON.stringify(productProgress)); }, [productProgress]);
+  useEffect(() => { localStorage.setItem('proscan_status', JSON.stringify(productStatus)); }, [productStatus]);
 
   useEffect(() => {
-    const focusInput = () => {
-      setTimeout(() => inputRef.current?.focus(), 10);
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
     };
-    focusInput();
-  }, [status]);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      if (inputValue.trim()) {
-        onScan(inputValue.trim());
-        setInputValue('');
-      }
+  // --- HELPER: Get Current Stage Object & Employee ---
+  const currentStageObj = useMemo(() => stages.find(s => s.id === currentStage) || stages[0], [stages, currentStage]);
+  const currentEmployeeId = stageEmployees[currentStage];
+  
+  const activeExtraFields = useMemo(() => {
+    if (!currentStageObj?.additionalFieldLabels) return [];
+    return currentStageObj.additionalFieldLabels.map((label, idx) => ({ label, idx })).filter(f => f.label.trim() !== "");
+  }, [currentStageObj]);
+
+  const loadDefaults = useCallback(() => {
+    if (currentStageObj?.additionalFieldDefaults) {
+      const defaults = [...currentStageObj.additionalFieldDefaults];
+      while(defaults.length < 8) defaults.push("");
+      setAdditionalValues(defaults);
     } else {
-        if (status === 'error') {
-            onClearError();
-        }
+      setAdditionalValues(Array(8).fill(""));
+    }
+  }, [currentStageObj]);
+
+  useEffect(() => {
+    loadDefaults();
+  }, [currentStage, loadDefaults]);
+
+  // --- INITIAL FOCUS ---
+  useEffect(() => {
+    if (!modelName) modelNameRef.current?.focus();
+    else if (!currentEmployeeId) employeeInputRef.current?.focus();
+    else {
+      if (currentStageObj?.enableMeasurement) measurementInputRef.current?.focus();
+      else if (activeExtraFields.length > 0) extraInputRefs.current[activeExtraFields[0].idx]?.focus();
+      else productInputRef.current?.focus();
+    }
+  }, [currentStage]);
+
+  // --- HANDLERS ---
+  const toggleFullScreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(err => console.error(err));
+    } else {
+      if (document.exitFullscreen) document.exitFullscreen();
     }
   };
 
-  const borderColor = 
-    status === 'error' ? 'border-red-500 focus:ring-red-200' : 
-    status === 'success' ? 'border-green-500 focus:ring-green-200' : 
-    'border-slate-300 focus:ring-blue-200';
-
-  const iconColor = 
-    status === 'error' ? 'text-red-500' : 
-    status === 'success' ? 'text-green-500' : 
-    'text-slate-400';
-
-  return (
-    <div className="w-full">
-      <div className="relative group">
-        <div className={`absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none ${iconColor}`}>
-           {status === 'error' ? <XCircle className="w-6 h-6" /> : 
-            status === 'success' ? <CheckCircle2 className="w-6 h-6" /> : 
-            <Scan className="w-6 h-6" />}
-        </div>
-        
-        <input
-          ref={inputRef}
-          type="text"
-          className={`block w-full pl-12 pr-4 py-4 text-lg font-mono bg-white border-2 rounded-xl focus:outline-none focus:ring-4 transition-all duration-200 shadow-sm ${borderColor}`}
-          placeholder="Quét mã hoặc nhập tay..."
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-          onKeyDown={handleKeyDown}
-          autoFocus
-          autoComplete="off"
-        />
-        
-        <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
-            <span className="text-xs text-slate-400 border border-slate-200 rounded px-2 py-1 bg-slate-50">
-                Enter ↵
-            </span>
-        </div>
-      </div>
-
-      <div className={`mt-2 h-6 text-sm font-medium transition-opacity duration-300 ${status !== 'idle' ? 'opacity-100' : 'opacity-0'}`}>
-        {status === 'error' && (
-           <span className="text-red-600 flex items-center gap-2">
-             <span>⚠️</span> {errorMessage || 'Lỗi không xác định'}
-           </span>
-        )}
-        {status === 'success' && (
-            <span className="text-green-600">
-                Đã thêm thành công
-            </span>
-        )}
-      </div>
-    </div>
-  );
-};
-
-const HistoryList: React.FC<{
-  records: ImeiRecord[];
-  onDelete: (id: string) => void;
-}> = ({ records, onDelete }) => {
-  if (records.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center py-12 text-slate-400 bg-white rounded-xl border border-slate-200 border-dashed">
-        <FileText className="w-12 h-12 mb-3 opacity-50" />
-        <p>Chưa có dữ liệu. Hãy quét mã đầu tiên!</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
-            <h3 className="font-semibold text-slate-700">Lịch sử quét</h3>
-            <span className="text-xs font-medium text-slate-500 bg-white px-2 py-1 rounded border border-slate-200">
-                Gần nhất trước
-            </span>
-        </div>
-      <div className="max-h-[500px] overflow-y-auto no-scrollbar">
-        <table className="w-full text-left border-collapse">
-          <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm">
-            <tr>
-              <th className="py-3 px-6 text-xs font-semibold text-slate-500 uppercase tracking-wider w-16">STT</th>
-              <th className="py-3 px-6 text-xs font-semibold text-slate-500 uppercase tracking-wider">Mã IMEI</th>
-              <th className="py-3 px-6 text-xs font-semibold text-slate-500 uppercase tracking-wider w-32">Giờ</th>
-              <th className="py-3 px-6 text-xs font-semibold text-slate-500 uppercase tracking-wider w-16 text-center">Xóa</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {records.map((record, index) => (
-              <tr key={record.id} className="hover:bg-blue-50/50 transition-colors group animate-in fade-in duration-300">
-                <td className="py-3 px-6 text-slate-500 font-medium text-sm">
-                  {records.length - index}
-                </td>
-                <td className="py-3 px-6">
-                  <span className="font-mono text-slate-700 font-medium tracking-wide">
-                    {record.code}
-                  </span>
-                </td>
-                <td className="py-3 px-6 text-slate-400 text-sm">
-                  {record.timestamp.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                </td>
-                <td className="py-3 px-6 text-center">
-                  <button
-                    onClick={() => onDelete(record.id)}
-                    className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-full transition-all"
-                    title="Xóa dòng này"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-};
-
-// --- MAIN APP ---
-export default function App() {
-  const [records, setRecords] = useState<ImeiRecord[]>([]);
-  const [status, setStatus] = useState<ScanStatus>('idle');
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  const handleScan = useCallback((code: string) => {
-    // 1. Check for duplicates
-    const exists = records.some(r => r.code === code);
-    
-    if (exists) {
-      setStatus('error');
-      setErrorMessage(`Mã "${code}" đã tồn tại trong danh sách!`);
-      playErrorSound();
-      return;
+  const handleEmployeeScan = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      const val = employeeInput.trim();
+      if (val) {
+        setStageEmployees(prev => ({ ...prev, [currentStage]: val }));
+        setEmployeeInput('');
+        setTimeout(() => {
+             if (currentStageObj?.enableMeasurement) measurementInputRef.current?.focus();
+             else if (activeExtraFields.length > 0) extraInputRefs.current[activeExtraFields[0].idx]?.focus();
+             else productInputRef.current?.focus();
+        }, 50);
+      }
     }
+  };
 
-    // 2. Add new record
-    const newRecord: ImeiRecord = {
+  const handleMeasurementScan = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      if (measurementValue.trim()) {
+        const nextField = activeExtraFields.find(f => !additionalValues[f.idx]);
+        if (nextField) {
+           extraInputRefs.current[nextField.idx]?.focus();
+        } else if (activeExtraFields.length > 0) {
+           // Check if we need to focus any extra fields or jump to product
+           const hasManualFields = activeExtraFields.some(f => !currentStageObj?.additionalFieldDefaults?.[f.idx]);
+           if (hasManualFields) {
+                const first = activeExtraFields[0];
+                extraInputRefs.current[first.idx]?.focus();
+           } else {
+             productInputRef.current?.focus();
+           }
+        } else {
+           productInputRef.current?.focus();
+        }
+      }
+    }
+  };
+
+  const handleExtraInputScan = (e: React.KeyboardEvent<HTMLInputElement>, index: number) => {
+    if (e.key === 'Enter') {
+      const currentActivePos = activeExtraFields.findIndex(f => f.idx === index);
+      
+      if (currentActivePos !== -1 && currentActivePos < activeExtraFields.length - 1) {
+         let nextActivePos = currentActivePos + 1;
+         let nextRealIdx = activeExtraFields[nextActivePos].idx;
+
+         if (nextActivePos < activeExtraFields.length) {
+            nextRealIdx = activeExtraFields[nextActivePos].idx;
+            extraInputRefs.current[nextRealIdx]?.focus();
+         } else {
+            productInputRef.current?.focus();
+         }
+      } else {
+         productInputRef.current?.focus();
+      }
+    }
+  };
+
+  const updateAdditionalValue = (index: number, value: string) => {
+    const newValues = [...additionalValues];
+    newValues[index] = value;
+    setAdditionalValues(newValues);
+  };
+
+  const handleError = (message: string, scannedCode: string = '') => {
+    const errorRecord: ScanRecord = {
       id: crypto.randomUUID(),
-      code: code,
-      timestamp: new Date()
+      stt: history.length + 1,
+      productCode: scannedCode || '---',
+      model: currentModel || 'CHƯA CÓ',
+      modelName: modelName || '',
+      employeeId: currentEmployeeId || 'CHƯA CÓ',
+      timestamp: new Date().toISOString(),
+      status: 'error',
+      note: message,
+      stage: currentStage
+    };
+    setHistory(prev => [errorRecord, ...prev]);
+    setErrorModal({ isOpen: true, message });
+  };
+
+  const handleSuccess = (code: string) => {
+    setProductProgress(prev => ({ ...prev, [code]: currentStage }));
+    setProductStatus(prev => ({ ...prev, [code]: 'valid' }));
+
+    const newRecord: ScanRecord = {
+      id: crypto.randomUUID(),
+      stt: history.length + 1,
+      productCode: code,
+      model: currentModel,
+      modelName: modelName,
+      employeeId: currentEmployeeId || 'UNKNOWN',
+      timestamp: new Date().toISOString(),
+      status: 'valid',
+      note: 'Thành công',
+      stage: currentStage,
+      measurement: currentStageObj?.enableMeasurement ? measurementValue : undefined,
+      additionalValues: [...additionalValues]
     };
 
-    setRecords(prev => [newRecord, ...prev]);
-    setStatus('success');
-    setErrorMessage(null);
-    playSuccessSound();
-
-    // Reset status back to idle after a short delay
+    setHistory(prev => [newRecord, ...prev]);
+    
+    // Clear inputs
+    setProductInput('');
+    setMeasurementValue(''); 
+    loadDefaults();
+    
+    // Smart Focus Recovery
     setTimeout(() => {
-        setStatus(prev => prev === 'success' ? 'idle' : prev);
-    }, 1500);
-
-  }, [records]);
-
-  const handleDelete = (id: string) => {
-    setRecords(prev => prev.filter(r => r.id !== id));
+        if (currentStageObj?.enableMeasurement) measurementInputRef.current?.focus();
+        else if (activeExtraFields.length > 0) extraInputRefs.current[activeExtraFields[0].idx]?.focus();
+        else productInputRef.current?.focus();
+    }, 50);
   };
 
-  const handleClearAll = () => {
-    if (window.confirm('Bạn có chắc chắn muốn xóa toàn bộ danh sách?')) {
-      setRecords([]);
-      setStatus('idle');
-      setErrorMessage(null);
+  const handleProductScan = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const code = productInput.trim();
+      if (!code) return;
+
+      // --- VALIDATIONS ---
+      if (!modelName.trim()) return handleError("Lỗi: Chưa nhập Tên Model.", code);
+      if (!currentEmployeeId) return handleError(`Lỗi: Chưa xác định nhân viên cho công đoạn này.`, code);
+
+      // --- SEQUENCE CHECK ---
+      if (currentStage > 1) {
+         const previousStageDone = (productProgress[code] || 0) >= (currentStage - 1);
+         if (!previousStageDone) {
+             const prevStageName = stages.find(s => s.id === currentStage - 1)?.name || `Công đoạn ${currentStage - 1}`;
+             return handleError(`Lỗi quy trình: Mã này chưa hoàn thành "${prevStageName}".`, code);
+         }
+      }
+
+      // MEASUREMENT VALIDATION
+      if (currentStageObj?.enableMeasurement) {
+        const val = measurementValue.trim();
+        if (!val) {
+           measurementInputRef.current?.focus();
+           return handleError(`Lỗi: Công đoạn này yêu cầu nhập ${currentStageObj.measurementLabel || 'giá trị đo'}.`, code);
+        }
+
+        const standard = currentStageObj.measurementStandard?.trim();
+        if (standard) {
+          const stdNum = parseFloat(standard.replace(',', '.'));
+          const valNum = parseFloat(val.replace(',', '.'));
+
+          if (!isNaN(stdNum)) {
+             if (isNaN(valNum)) return handleError(`Lỗi: Tiêu chuẩn là số (${standard}), vui lòng nhập kết quả là số.`, code);
+             if (valNum >= stdNum) return handleError(`LỖI NG: Kết quả đo quá cao!\nTiêu chuẩn (Max): < ${standard}\nThực tế: ${val}`, code);
+          } else {
+             if (val.toUpperCase() !== standard.toUpperCase()) return handleError(`LỖI NG: Kết quả đo không đạt chuẩn!\nTiêu chuẩn: ${standard}\nThực tế: ${val}`, code);
+          }
+        }
+      }
+      
+      // VALIDATE EXTRA FIELDS
+      for (const field of activeExtraFields) {
+           const fieldVal = additionalValues[field.idx].trim();
+           // Require first field if present
+           if (!fieldVal && field.idx === activeExtraFields[0].idx) {
+             extraInputRefs.current[field.idx]?.focus();
+             return handleError(`Lỗi: Chưa nhập thông tin cho "${field.label}".`, code);
+           }
+
+           if (fieldVal) {
+                const whitelistString = currentStageObj.additionalFieldValidationLists?.[field.idx];
+                if (whitelistString && whitelistString.trim()) {
+                    const allowedValues = whitelistString.trim().split(/\s+/).map(s => s.toUpperCase());
+                    if (allowedValues.length > 0 && !allowedValues.includes(fieldVal.toUpperCase())) {
+                        extraInputRefs.current[field.idx]?.focus();
+                        return handleError(`LỖI: Giá trị "${fieldVal}" không nằm trong danh sách cho phép của "${field.label}".`, code);
+                    }
+                }
+
+                const minStr = currentStageObj.additionalFieldMins?.[field.idx]?.trim();
+                const maxStr = currentStageObj.additionalFieldMaxs?.[field.idx]?.trim();
+
+                if (minStr || maxStr) {
+                    const valNum = parseFloat(fieldVal.replace(',', '.'));
+                    if (isNaN(valNum)) {
+                        extraInputRefs.current[field.idx]?.focus();
+                        return handleError(`LỖI: "${field.label}" yêu cầu giá trị số.`, code);
+                    }
+                    if (minStr) {
+                        const min = parseFloat(minStr.replace(',', '.'));
+                        if (!isNaN(min) && valNum < min) {
+                            extraInputRefs.current[field.idx]?.focus();
+                            return handleError(`LỖI NG: Giá trị "${fieldVal}" thấp hơn mức tối thiểu (${min}) của "${field.label}".`, code);
+                        }
+                    }
+                    if (maxStr) {
+                        const max = parseFloat(maxStr.replace(',', '.'));
+                        if (!isNaN(max) && valNum > max) {
+                            extraInputRefs.current[field.idx]?.focus();
+                            return handleError(`LỖI NG: Giá trị "${fieldVal}" cao hơn mức tối đa (${max}) của "${field.label}".`, code);
+                        }
+                    }
+                }
+           }
+      }
+
+      // DUPLICATE CHECK
+      const currentProgress = productProgress[code] || 0;
+      if (currentProgress >= currentStage) {
+        return handleError(`Lỗi: Mã này đã được quét thành công trước đó (Tại công đoạn này).`, code);
+      }
+
+      handleSuccess(code);
     }
   };
 
-  const handleExport = () => {
-    if (records.length === 0) {
-      alert('Danh sách trống, không thể xuất file.');
-      return;
-    }
-    generateExcel(records);
+  const handleCloseError = () => {
+    setErrorModal({ isOpen: false, message: '' });
+    setProductInput('');
+    setTimeout(() => {
+      if (!modelName.trim()) modelNameRef.current?.focus();
+      else if (!currentEmployeeId) employeeInputRef.current?.focus();
+      else if (currentStageObj?.enableMeasurement) {
+         if (!measurementValue) measurementInputRef.current?.focus();
+         else productInputRef.current?.focus();
+      }
+      else if (activeExtraFields.length > 0) {
+         extraInputRefs.current[activeExtraFields[0].idx]?.focus();
+      }
+      else productInputRef.current?.focus();
+    }, 50);
   };
 
-  const clearError = () => {
-      setStatus('idle');
-      setErrorMessage(null);
+  const exportExcel = useCallback(() => {
+    const workbook = utils.book_new();
+
+    // 1. Export Data Sheets per Stage
+    stages.forEach(stage => {
+        const stageData = history.filter(item => item.stage === stage.id).reverse();
+        const labels = stage.statusLabels || { valid: "OK/ĐÃ SỬA", defect: "NG/TRẢ LẠI", error: "LỖI HỆ THỐNG" };
+        
+        const rows = stageData.map((item, index) => {
+            let statusText = labels.error;
+            if (item.status === 'valid') statusText = labels.valid;
+            if (item.status === 'defect') statusText = labels.defect;
+
+            const row: any = {
+                "STT": index + 1,
+                "Mã IMEI máy": item.productCode,
+                "Tên Model": item.modelName || '',
+            };
+
+            if (stage.enableMeasurement) {
+                row[stage.measurementLabel || "Kết quả"] = item.measurement || '-';
+            }
+
+            if (stage.additionalFieldLabels) {
+                stage.additionalFieldLabels.forEach((label, idx) => {
+                    if (label && label.trim()) {
+                        row[label] = item.additionalValues?.[idx] || "";
+                    }
+                });
+            }
+
+            row["Nhân Viên"] = item.employeeId;
+            row["Thời Gian"] = format(new Date(item.timestamp), 'yyyy-MM-dd HH:mm:ss');
+            row["Trạng Thái"] = statusText;
+            row["Ghi Chú"] = item.note || '';
+
+            return row;
+        });
+
+        const worksheet = utils.json_to_sheet(rows);
+
+        if (rows.length > 0) {
+            const wscols = Object.keys(rows[0]).map(key => ({ wch: Math.max(key.length + 5, 10) }));
+            worksheet['!cols'] = wscols;
+        }
+
+        const sheetName = (stage.name || `Stage ${stage.id}`)
+            .replace(/[:\\\/?*\[\]]/g, "")
+            .substring(0, 30);
+        
+        utils.book_append_sheet(workbook, worksheet, sheetName);
+    });
+
+    // 2. Export Inventory Summary
+    const modelStats: Record<string, { input: Set<string>, output: Set<string> }> = {};
+
+    history.forEach(item => {
+        if (item.status !== 'valid') return;
+        const model = (item.modelName || "N/A").trim().toUpperCase();
+        
+        if (!modelStats[model]) {
+            modelStats[model] = { input: new Set(), output: new Set() };
+        }
+
+        if (item.stage === 1) {
+            modelStats[model].input.add(item.productCode);
+        } else if (item.stage === 2) {
+            modelStats[model].output.add(item.productCode);
+        }
+    });
+
+    const summaryRows = Object.keys(modelStats).sort().map((model, idx) => {
+        const inputCount = modelStats[model].input.size;
+        const outputCount = modelStats[model].output.size;
+        return {
+            "STT": idx + 1,
+            "Tên Model": model,
+            "Tổng Nhập (Công đoạn 1)": inputCount,
+            "Tổng Xuất (Công đoạn 2)": outputCount,
+            "Tồn Kho (Chưa xuất)": inputCount - outputCount
+        };
+    });
+
+    const summaryWs = utils.json_to_sheet(summaryRows.length > 0 ? summaryRows : [{ "Thông báo": "Chưa có dữ liệu thống kê" }]);
+    const summaryCols = summaryRows.length > 0 ? Object.keys(summaryRows[0]).map(key => ({ wch: 22 })) : [{ wch: 30 }];
+    summaryWs['!cols'] = summaryCols;
+
+    utils.book_append_sheet(workbook, summaryWs, "Báo Cáo Tồn Kho");
+    
+    writeFile(workbook, `scan_process_data_${format(new Date(), 'yyyyMMdd_HHmmss')}.xls`);
+  }, [history, stages]);
+
+  // RESET ONLY DATA, KEEP SETTINGS
+  const resetSession = () => {
+    if (confirm("CẢNH BÁO: Bạn có chắc muốn xóa lịch sử quét? \n\n(Cấu hình Công đoạn và Nhân viên sẽ được GIỮ NGUYÊN)")) {
+      // 1. Clear Data State
+      setHistory([]);
+      setProductProgress({});
+      setProductStatus({});
+      setProductInput('');
+      setMeasurementValue('');
+      
+      // 2. Explicitly update storage immediately to avoid race conditions
+      localStorage.setItem('proscan_history', JSON.stringify([]));
+      localStorage.setItem('proscan_progress', JSON.stringify({}));
+      localStorage.setItem('proscan_status', JSON.stringify({}));
+      
+      // NOTE: We do NOT remove 'proscan_stages', 'proscan_employees', or 'proscan_model_name'
+      // This ensures settings persist.
+      
+      alert("Đã xóa dữ liệu ca làm việc mới!");
+      // No window.location.reload() needed
+    }
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 pb-20">
+    <div className="min-h-screen flex flex-col bg-gray-100 font-sans">
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-20">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="bg-blue-600 p-2 rounded-lg">
-                <Smartphone className="w-5 h-5 text-white" />
+      <header className="bg-slate-900 text-white p-3 shadow-lg sticky top-0 z-20">
+        <div className="w-full px-2 flex flex-col md:flex-row items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="bg-blue-600 p-2 rounded-lg shadow-blue-500/50 shadow-lg">
+              <ScanLine size={32} />
             </div>
-            <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-700 to-blue-500">
-              IMEI Scanner Pro
-            </h1>
+            <div>
+              <h1 className="text-2xl font-bold tracking-wide">Hệ Thống Quản Lý Sửa Chữa</h1>
+              <p className="text-slate-400 text-xs uppercase tracking-wider">Ver 4.6 (Persistent Mode)</p>
+            </div>
           </div>
-          <div className="flex items-center gap-2 text-xs font-medium text-green-600 bg-green-50 px-3 py-1 rounded-full border border-green-100">
-            <ShieldCheck className="w-3 h-3" />
-            <span>Sẵn sàng</span>
+          
+          <div className="flex flex-col md:flex-row items-center gap-2 w-full md:w-auto">
+             <div className="flex items-center bg-slate-800 rounded px-3 py-1.5 border border-slate-700">
+                 <Tag size={18} className="text-slate-400 mr-2" />
+                 <input
+                    ref={modelNameRef}
+                    type="text"
+                    className="bg-transparent text-white border-none focus:ring-0 text-base font-bold py-1 w-40 placeholder-slate-500 uppercase tracking-wide"
+                    placeholder="NHẬP TÊN MODEL"
+                    value={modelName}
+                    onChange={(e) => setModelName(e.target.value)}
+                  />
+             </div>
+             
+             <div className="flex items-center gap-2">
+                <Button onClick={() => setIsSettingsOpen(true)} className="text-sm p-2.5 bg-slate-700 hover:bg-slate-600 border border-slate-600" title="Cấu hình công đoạn">
+                  <Edit size={18} />
+                </Button>
+                
+                <Button onClick={toggleFullScreen} className="text-sm p-2.5 bg-slate-700 hover:bg-slate-600 border border-slate-600" title="Toàn màn hình">
+                    {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
+                </Button>
+
+                <Button onClick={exportExcel} variant="success" className="text-sm py-2 px-4">
+                  <Download size={18} className="mr-2 inline" /> Excel
+                </Button>
+                <Button onClick={resetSession} variant="secondary" className="text-sm py-2 px-4">
+                  <RefreshCw size={18} className="mr-2 inline" /> Reset
+                </Button>
+             </div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-        
-        {/* Input Section */}
-        <section aria-label="Scanner Input">
-          <ScannerInput 
-            onScan={handleScan} 
-            status={status} 
-            errorMessage={errorMessage}
-            onClearError={clearError}
-          />
-        </section>
-
-        {/* Stats & Actions */}
-        <section className="grid grid-cols-2 gap-4">
-            <StatsCard count={records.length} />
-            <div className="flex flex-col gap-2 justify-center">
-                 <button 
-                    onClick={handleExport}
-                    disabled={records.length === 0}
-                    className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-medium rounded-xl shadow-sm hover:shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
+      {/* Main Content */}
+      <main className="flex-1 p-4 md:p-6 w-full grid grid-cols-1 lg:grid-cols-3 gap-6">
+          
+          {/* TOP: STAGE SELECTION TABS */}
+          <div className="col-span-1 lg:col-span-3">
+            <div className="flex space-x-4 bg-white p-3 rounded-xl shadow-sm overflow-x-auto border border-gray-200">
+              {stages.map((stage) => (
+                <button
+                  key={stage.id}
+                  onClick={() => setCurrentStage(stage.id)}
+                  className={`px-8 py-5 rounded-lg font-bold text-xl tracking-wide whitespace-nowrap transition-all flex items-center gap-4 ${
+                    currentStage === stage.id
+                      ? 'bg-blue-600 text-white shadow-lg scale-105'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-800 border border-transparent hover:border-gray-300'
+                  }`}
                 >
-                    <FileSpreadsheet className="w-4 h-4" />
-                    Xuất Excel
+                  <span className={`px-3 py-1 rounded text-base ${currentStage === stage.id ? 'bg-white/20' : 'bg-gray-300 text-gray-700'}`}>
+                    {stage.id}
+                  </span>
+                  {stage.name}
+                  {currentStage === stage.id && <ChevronRight size={24} className="animate-pulse" />}
                 </button>
-                <button 
-                    onClick={handleClearAll}
-                    disabled={records.length === 0}
-                    className="flex-1 bg-white border border-slate-200 text-slate-600 hover:text-red-600 hover:border-red-200 hover:bg-red-50 font-medium rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm h-10"
-                >
-                    <Trash2 className="w-4 h-4" />
-                    Xóa tất cả
-                </button>
+              ))}
             </div>
-        </section>
+          </div>
 
-        {/* List Section */}
-        <section>
-          <HistoryList records={records} onDelete={handleDelete} />
-        </section>
+          {/* LEFT: INPUTS & STATS */}
+          <div className="lg:col-span-1 space-y-4">
+            
+            <div className="bg-blue-600 text-white p-5 rounded-lg shadow-md flex flex-col justify-center transition-all duration-300">
+                <h3 className="text-xs uppercase font-bold opacity-70 mb-1 tracking-wider">KHU VỰC LÀM VIỆC</h3>
+                <div className="text-xl font-bold flex items-center gap-2 truncate tracking-wide">
+                    <Layers size={24} /> <span className="truncate">{currentStageObj?.name || `Trạm kiểm tra`}</span>
+                </div>
+                {currentEmployeeId && (
+                    <div className="mt-2 text-sm bg-blue-700/50 p-1 px-3 rounded inline-block w-fit">
+                        NV: <b>{currentEmployeeId}</b>
+                    </div>
+                )}
+            </div>
 
+            <div className={`grid gap-3 ${currentStage > 1 ? 'grid-cols-2 md:grid-cols-3' : 'grid-cols-2'}`}>
+                {currentStage > 1 && (
+                  <StatCard 
+                    title="TỒN CHƯA XUẤT" 
+                    value={pendingCount} 
+                    type="warning" 
+                    icon={<Clock size={24} />} 
+                  />
+                )}
+                <StatCard 
+                  title={currentStageObj.statusLabels?.valid || "OK/ĐÃ SỬA"} 
+                  value={validScanCount} 
+                  type="success" 
+                  icon={<CheckCircle size={24} />} 
+                />
+                <StatCard 
+                  title={currentStageObj.statusLabels?.error || "LỖI HỆ THỐNG"} 
+                  value={errorScanCount} 
+                  type="neutral" 
+                  icon={<AlertCircle size={24} />} 
+                />
+            </div>
+
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+               <div className="p-4 bg-gray-50 border-b border-gray-200 font-bold text-gray-700 flex items-center gap-2 text-base uppercase tracking-wide">
+                 <ScanLine size={20} /> NHẬP LIỆU
+               </div>
+               <div className="p-5 space-y-6">
+                  {/* Employee */}
+                  <div>
+                    <label className="block text-sm font-bold text-gray-600 mb-2">1. Nhân viên</label>
+                    <div className="relative">
+                      <input
+                        ref={employeeInputRef}
+                        className={`w-full text-lg p-3 pl-10 border rounded focus:outline-none transition-colors tracking-wide ${currentEmployeeId ? 'border-green-300 bg-green-50 focus:border-green-500' : 'border-gray-300 focus:border-blue-500'}`}
+                        placeholder={currentEmployeeId ? "Đổi nhân viên..." : "Scan mã NV để bắt đầu..."}
+                        value={employeeInput}
+                        onChange={e => setEmployeeInput(e.target.value)}
+                        onKeyDown={handleEmployeeScan}
+                      />
+                      <Users className="absolute left-3 top-3.5 text-gray-400" size={20} />
+                      {currentEmployeeId && (
+                        <div className="absolute right-2 top-3 text-green-700 font-bold text-xs bg-green-200 px-2 py-1 rounded border border-green-300">
+                          {currentEmployeeId}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  
+                  <hr className="border-gray-100"/>
+
+                  {/* Measurement Input */}
+                  {currentStageObj?.enableMeasurement && (
+                    <div className="animate-in fade-in slide-in-from-top-2 duration-300 space-y-3">
+                      <div>
+                        <label className="block text-sm font-bold text-purple-700 mb-2 flex items-center gap-2">
+                          <Activity size={18} className="text-purple-600"/>
+                          2. {currentStageObj.measurementLabel || "Kết quả"} (Bắt buộc)
+                        </label>
+                        <input
+                          ref={measurementInputRef}
+                          className="w-full text-lg p-3 border-2 border-purple-300 bg-purple-50 rounded focus:border-purple-500 focus:outline-none placeholder-purple-300 tracking-wide"
+                          placeholder={currentStageObj.measurementStandard ? `Nhập giá trị (Chuẩn: ${currentStageObj.measurementStandard})...` : `Nhập ${currentStageObj.measurementLabel || "giá trị"}...`}
+                          value={measurementValue}
+                          onChange={e => setMeasurementValue(e.target.value)}
+                          onKeyDown={handleMeasurementScan}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Extra Fields (Dynamic Error Inputs) */}
+                  {activeExtraFields.length > 0 && (
+                        <div className="bg-gray-50 p-4 rounded border border-gray-200 animate-in fade-in slide-in-from-top-2 duration-300">
+                           <label className="block text-sm font-bold text-gray-500 mb-3 uppercase flex items-center gap-2 tracking-wide">
+                             <List size={14}/> Thông tin chi tiết (Lỗi/Linh kiện)
+                           </label>
+                           {/* Use grid-cols-1 on small screens, cols-2 on medium to accomodate longer error descriptions */}
+                           <div className="grid grid-cols-1 gap-4">
+                              {activeExtraFields.map((field) => (
+                                <div key={field.idx}>
+                                   <label className="block text-xs font-bold text-blue-800 mb-1.5 truncate flex items-center gap-1.5 tracking-wide" title={field.label}>
+                                      <PenTool size={12} /> {field.label}
+                                   </label>
+                                   <input
+                                      ref={(el) => { extraInputRefs.current[field.idx] = el; }}
+                                      value={additionalValues[field.idx]}
+                                      onChange={(e) => updateAdditionalValue(field.idx, e.target.value)}
+                                      onKeyDown={(e) => handleExtraInputScan(e, field.idx)}
+                                      className="w-full p-2.5 text-base border border-gray-300 rounded focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none bg-white shadow-sm tracking-wide"
+                                      placeholder={currentStageObj.additionalFieldDefaults?.[field.idx] ? `Mặc định: ${currentStageObj.additionalFieldDefaults?.[field.idx]}` : "Nhập thông tin..."}
+                                   />
+                                </div>
+                              ))}
+                           </div>
+                        </div>
+                  )}
+
+                  {/* Product */}
+                  <div>
+                    <label className="block text-sm font-bold text-gray-600 mb-2">
+                      {currentStageObj?.enableMeasurement || activeExtraFields.length > 0 ? "3" : "2"}. Mã IMEI máy (Enter để lưu)
+                    </label>
+                    <div className="relative">
+                      <input
+                        ref={productInputRef}
+                        disabled={errorModal.isOpen}
+                        className={`w-full text-2xl font-mono p-4 pl-12 border rounded shadow-inner focus:outline-none transition-colors tracking-wide
+                          ${errorModal.isOpen 
+                            ? 'bg-gray-100 cursor-not-allowed border-gray-300' 
+                            : 'bg-white border-blue-600 ring-4 ring-blue-50/50'}
+                        `}
+                        placeholder={
+                          !modelName ? "⚠️ Nhập Tên Model trước" :
+                          !currentEmployeeId ? "⚠️ Quét nhân viên trước" :
+                          "Sẵn sàng scan IMEI..."
+                        }
+                        value={productInput}
+                        onChange={e => setProductInput(e.target.value)}
+                        onKeyDown={handleProductScan}
+                      />
+                      <Box className={`absolute left-3 top-1/2 -translate-y-1/2 ${currentEmployeeId && modelName ? 'text-blue-600' : 'text-gray-400'}`} size={28} />
+                    </div>
+                  </div>
+               </div>
+            </div>
+          </div>
+
+          {/* RIGHT: HISTORY TABLE */}
+          <div className="lg:col-span-2 h-[calc(100vh-220px)] min-h-[500px]">
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200 h-full flex flex-col">
+               <div className="p-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center rounded-t-lg">
+                  <h3 className="font-bold text-gray-700 text-base tracking-wide">Lịch sử Quét (Khu vực này)</h3>
+                  <div className="text-sm flex gap-4 font-medium">
+                    <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-green-500"></div> OK</span>
+                    <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-amber-500"></div> NG</span>
+                    <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-red-500"></div> Err</span>
+                  </div>
+               </div>
+               
+               <div className="flex-1 overflow-auto">
+                 <table className="w-full text-left text-base tracking-wide">
+                   <thead className="bg-gray-100 text-gray-600 sticky top-0 z-10 shadow-sm border-b border-gray-200">
+                     <tr>
+                       <th className="p-4 font-semibold w-16 text-center">STT</th>
+                       <th className="p-4 font-semibold">Công Đoạn</th>
+                       <th className="p-4 font-semibold">Mã IMEI máy</th>
+                       <th className="p-4 font-semibold text-blue-700">Tên Model</th>
+                       <th className="p-4 font-semibold">Chi tiết Sửa chữa / Lỗi</th>
+                       <th className="p-4 font-semibold">Nhân Viên</th>
+                       <th className="p-4 font-semibold">Trạng Thái</th>
+                     </tr>
+                   </thead>
+                   <tbody className="divide-y divide-gray-100">
+                     {history.length === 0 ? (
+                       <tr><td colSpan={7} className="p-10 text-center text-gray-400 italic text-lg">Chưa có dữ liệu</td></tr>
+                     ) : (
+                       history.map((row) => {
+                         const rowStageObj = stages.find(s => s.id === row.stage);
+                         const labels = rowStageObj?.statusLabels || { valid: "OK", defect: "NG", error: "ERR" };
+                         
+                         let rowClass = "";
+                         if (row.status === 'valid') rowClass = "border-l-4 border-l-green-500 hover:bg-gray-50";
+                         else if (row.status === 'defect') rowClass = "border-l-4 border-l-amber-500 bg-amber-50 hover:bg-amber-100";
+                         else rowClass = "border-l-4 border-l-red-500 bg-red-50 hover:bg-red-100";
+                         
+                         const renderExtended = () => {
+                           if (!row.additionalValues || row.additionalValues.every(v => !v)) return null;
+                           return (
+                             <div className="mt-1 flex flex-col gap-1">
+                               {row.additionalValues.map((v, i) => {
+                                 if (!v) return null;
+                                 const label = rowStageObj?.additionalFieldLabels?.[i];
+                                 return (
+                                   <span key={i} className="text-xs bg-purple-50 text-purple-800 px-2 py-0.5 rounded border border-purple-100 w-fit">
+                                     {label ? <span className="font-semibold text-purple-900">{label}:</span> : ''} {v}
+                                   </span>
+                                 )
+                               })}
+                             </div>
+                           )
+                         };
+
+                         return (
+                           <tr key={row.id} className={rowClass}>
+                             <td className="p-4 text-gray-500 text-center">{row.stt}</td>
+                             <td className="p-4">
+                                <span className={`text-xs font-bold px-2 py-1 rounded border ${row.stage === currentStage ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-gray-100 text-gray-600 border-gray-200'}`}>
+                                    {rowStageObj?.name || `Stage ${row.stage}`}
+                                </span>
+                             </td>
+                             <td className={`p-4 font-mono font-medium ${row.status === 'error' ? 'text-red-700 line-through' : row.status === 'defect' ? 'text-amber-800' : 'text-blue-700'}`}>
+                               {row.productCode}
+                             </td>
+                             <td className="p-4 font-bold text-gray-700">
+                               {row.modelName || <span className="text-gray-300">-</span>}
+                             </td>
+                             <td className="p-4 align-top">
+                                {row.measurement && <div className="font-bold text-purple-700 mb-1">{rowStageObj?.measurementLabel}: {row.measurement}</div>}
+                                {renderExtended()}
+                             </td>
+                             <td className="p-4 text-gray-900">{row.employeeId}</td>
+                             <td className="p-4">
+                               {row.status === 'valid' ? (
+                                 <div className="text-sm text-gray-500 flex items-center gap-1.5">
+                                   <CheckCircle size={16} className="text-green-500"/>
+                                   <span className="font-bold text-green-700">{labels.valid}</span>
+                                   <span className="opacity-50">|</span>
+                                   {format(new Date(row.timestamp), 'HH:mm:ss')}
+                                 </div>
+                               ) : row.status === 'defect' ? (
+                                  <span className="text-amber-700 font-bold text-sm flex items-center gap-1.5">
+                                   <XCircle size={16}/> {labels.defect}: {row.note}
+                                 </span>
+                               ) : (
+                                 <span className="text-red-600 font-bold text-sm flex items-center gap-1.5">
+                                   <AlertTriangle size={16}/> {labels.error}: {row.note}
+                                 </span>
+                               )}
+                             </td>
+                           </tr>
+                         );
+                       })
+                     )}
+                   </tbody>
+                 </table>
+               </div>
+            </div>
+          </div>
       </main>
+
+      <ErrorModal isOpen={errorModal.isOpen} message={errorModal.message} onClose={handleCloseError} />
+
+      <StageSettingsModal 
+        isOpen={isSettingsOpen}
+        stages={stages}
+        onSave={setStages}
+        onClose={() => setIsSettingsOpen(false)}
+      />
     </div>
   );
 }
