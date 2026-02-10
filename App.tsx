@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Download, ScanLine, Users, CheckCircle, RefreshCw, Box, Settings, Layers, Edit, XCircle, Activity, List, Tag, Maximize, Minimize, AlertCircle, ChevronRight, PenTool, AlertTriangle, Clock } from 'lucide-react';
+import { Download, ScanLine, Users, CheckCircle, RefreshCw, Box, Settings, Layers, Edit, XCircle, Activity, List, Tag, Maximize, Minimize, AlertCircle, ChevronRight, PenTool, AlertTriangle, Clock, Plus } from 'lucide-react';
 import { format } from 'date-fns';
 import { utils, writeFile } from 'xlsx';
 
@@ -20,7 +20,6 @@ export default function App() {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-            // Migration and data sanitization
             if (parsed.length === 1) {
                 return [parsed[0], DEFAULT_PROCESS_STAGES[1]];
             }
@@ -50,10 +49,13 @@ export default function App() {
     } catch (e) { return {}; }
   });
 
-  // 3. Model Info
-  const [currentModel, setCurrentModel] = useState<string>(() => {
-    return localStorage.getItem('proscan_current_model') || '';
-  }); 
+  // 3. Model Info & List
+  const [availableModels, setAvailableModels] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('proscan_available_models');
+      return saved ? JSON.parse(saved) : ["IPHONE 13", "IPHONE 14", "SAMSUNG S23"];
+    } catch (e) { return ["IPHONE 13", "IPHONE 14", "SAMSUNG S23"]; }
+  });
 
   const [modelName, setModelName] = useState<string>(() => {
     return localStorage.getItem('proscan_model_name') || '';
@@ -101,7 +103,6 @@ export default function App() {
   const employeeInputRef = useRef<HTMLInputElement>(null);
   const measurementInputRef = useRef<HTMLInputElement>(null);
   const productInputRef = useRef<HTMLInputElement>(null);
-  const modelNameRef = useRef<HTMLInputElement>(null);
   const extraInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   // Calculate stats for CURRENT stage
@@ -117,7 +118,7 @@ export default function App() {
   // --- IMMEDIATE PERSISTENCE EFFECTS (Save on Change) ---
   useEffect(() => { localStorage.setItem('proscan_stages', JSON.stringify(stages)); }, [stages]);
   useEffect(() => { localStorage.setItem('proscan_employees', JSON.stringify(stageEmployees)); }, [stageEmployees]);
-  useEffect(() => { localStorage.setItem('proscan_current_model', currentModel); }, [currentModel]);
+  useEffect(() => { localStorage.setItem('proscan_available_models', JSON.stringify(availableModels)); }, [availableModels]);
   useEffect(() => { localStorage.setItem('proscan_model_name', modelName); }, [modelName]);
   useEffect(() => { localStorage.setItem('proscan_active_stage', currentStage.toString()); }, [currentStage]);
   
@@ -159,14 +160,13 @@ export default function App() {
 
   // --- INITIAL FOCUS ---
   useEffect(() => {
-    if (!modelName) modelNameRef.current?.focus();
-    else if (!currentEmployeeId) employeeInputRef.current?.focus();
+    if (!currentEmployeeId) employeeInputRef.current?.focus();
     else {
       if (currentStageObj?.enableMeasurement) measurementInputRef.current?.focus();
       else if (activeExtraFields.length > 0) extraInputRefs.current[activeExtraFields[0].idx]?.focus();
       else productInputRef.current?.focus();
     }
-  }, [currentStage]);
+  }, [currentStage, currentEmployeeId]);
 
   // --- HANDLERS ---
   const toggleFullScreen = () => {
@@ -175,6 +175,15 @@ export default function App() {
     } else {
       if (document.exitFullscreen) document.exitFullscreen();
     }
+  };
+
+  const handleModelSelect = (model: string) => {
+    setModelName(model);
+    // Auto focus employee input if not set, or product input if set
+    setTimeout(() => {
+        if (!currentEmployeeId) employeeInputRef.current?.focus();
+        else productInputRef.current?.focus();
+    }, 50);
   };
 
   const handleEmployeeScan = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -199,7 +208,6 @@ export default function App() {
         if (nextField) {
            extraInputRefs.current[nextField.idx]?.focus();
         } else if (activeExtraFields.length > 0) {
-           // Check if we need to focus any extra fields or jump to product
            const hasManualFields = activeExtraFields.some(f => !currentStageObj?.additionalFieldDefaults?.[f.idx]);
            if (hasManualFields) {
                 const first = activeExtraFields[0];
@@ -245,7 +253,7 @@ export default function App() {
       id: crypto.randomUUID(),
       stt: history.length + 1,
       productCode: scannedCode || '---',
-      model: currentModel || 'CHƯA CÓ',
+      model: localStorage.getItem('proscan_current_model') || 'CHƯA CÓ',
       modelName: modelName || '',
       employeeId: currentEmployeeId || 'CHƯA CÓ',
       timestamp: new Date().toISOString(),
@@ -265,7 +273,7 @@ export default function App() {
       id: crypto.randomUUID(),
       stt: history.length + 1,
       productCode: code,
-      model: currentModel,
+      model: localStorage.getItem('proscan_current_model') || '',
       modelName: modelName,
       employeeId: currentEmployeeId || 'UNKNOWN',
       timestamp: new Date().toISOString(),
@@ -298,7 +306,7 @@ export default function App() {
       if (!code) return;
 
       // --- VALIDATIONS ---
-      if (!modelName.trim()) return handleError("Lỗi: Chưa nhập Tên Model.", code);
+      if (!modelName.trim()) return handleError("Lỗi: Chưa chọn Tên Model (Click nút phía trên).", code);
       if (!currentEmployeeId) return handleError(`Lỗi: Chưa xác định nhân viên cho công đoạn này.`, code);
 
       // --- SEQUENCE CHECK ---
@@ -335,7 +343,6 @@ export default function App() {
       // VALIDATE EXTRA FIELDS
       for (const field of activeExtraFields) {
            const fieldVal = additionalValues[field.idx].trim();
-           // Require first field if present
            if (!fieldVal && field.idx === activeExtraFields[0].idx) {
              extraInputRefs.current[field.idx]?.focus();
              return handleError(`Lỗi: Chưa nhập thông tin cho "${field.label}".`, code);
@@ -392,7 +399,9 @@ export default function App() {
     setErrorModal({ isOpen: false, message: '' });
     setProductInput('');
     setTimeout(() => {
-      if (!modelName.trim()) modelNameRef.current?.focus();
+      if (!modelName.trim()) {
+          // If no model, don't focus anything yet, visually they should select model
+      }
       else if (!currentEmployeeId) employeeInputRef.current?.focus();
       else if (currentStageObj?.enableMeasurement) {
          if (!measurementValue) measurementInputRef.current?.focus();
@@ -408,55 +417,110 @@ export default function App() {
   const exportExcel = useCallback(() => {
     const workbook = utils.book_new();
 
-    // 1. Export Data Sheets per Stage
-    stages.forEach(stage => {
-        const stageData = history.filter(item => item.stage === stage.id).reverse();
-        const labels = stage.statusLabels || { valid: "OK/ĐÃ SỬA", defect: "NG/TRẢ LẠI", error: "LỖI HỆ THỐNG" };
+    // 1. MERGED DATA SHEET
+    // Get all valid history, sort by time DESC
+    const sortedHistory = [...history].sort((a, b) => 
+        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+
+    // COLLECT DYNAMIC HEADERS STRICTLY BY STAGE ORDER
+    // (Stage 1 Fields -> Stage 2 Fields -> etc.)
+    const dynamicHeaderList: string[] = [];
+    
+    stages.forEach(s => {
+        // 1. Measurement (if enabled for this stage)
+        if (s.enableMeasurement && s.measurementLabel) {
+            const label = s.measurementLabel.trim();
+            if (label && !dynamicHeaderList.includes(label)) {
+                dynamicHeaderList.push(label);
+            }
+        }
         
-        const rows = stageData.map((item, index) => {
-            let statusText = labels.error;
-            if (item.status === 'valid') statusText = labels.valid;
-            if (item.status === 'defect') statusText = labels.defect;
-
-            const row: any = {
-                "STT": index + 1,
-                "Mã IMEI máy": item.productCode,
-                "Tên Model": item.modelName || '',
-            };
-
-            if (stage.enableMeasurement) {
-                row[stage.measurementLabel || "Kết quả"] = item.measurement || '-';
+        // 2. Additional Fields (in order 1-8 for this stage)
+        s.additionalFieldLabels?.forEach(l => {
+            if (l && l.trim()) {
+                const label = l.trim();
+                // Prevent duplicates (though users usually configure distinct fields per stage)
+                if (!dynamicHeaderList.includes(label)) {
+                    dynamicHeaderList.push(label);
+                }
             }
+        });
+    });
 
-            if (stage.additionalFieldLabels) {
-                stage.additionalFieldLabels.forEach((label, idx) => {
-                    if (label && label.trim()) {
-                        row[label] = item.additionalValues?.[idx] || "";
+    const mergedRows = sortedHistory.map((item, index) => {
+        const stageObj = stages.find(s => s.id === item.stage) || stages[0];
+        const labels = stageObj.statusLabels || { valid: "OK/ĐÃ SỬA", defect: "NG/TRẢ LẠI", error: "LỖI HỆ THỐNG" };
+        
+        let statusText = labels.error;
+        if (item.status === 'valid') statusText = labels.valid;
+        if (item.status === 'defect') statusText = labels.defect;
+
+        // Base Row
+        const row: any = {
+            "STT": index + 1,
+            "Thời Gian": format(new Date(item.timestamp), 'yyyy-MM-dd HH:mm:ss'),
+            "Công Đoạn": stageObj.name,
+            "Mã IMEI": item.productCode,
+            "Tên Model": item.modelName || '',
+        };
+
+        // Fill Dynamic Columns (Measurement & Extra Fields) based on the record's stage
+        dynamicHeaderList.forEach(header => {
+            let val = "";
+            
+            // Only fill data if this header actually belongs to the stage of this specific record
+            // OR if multiple stages share the same field name (e.g. "Notes"), fill it regardless.
+            // Priority: Check if the current record's stage configuration uses this header.
+            
+            if (stageObj) {
+                // 1. Check if this header matches the Measurement Label of the CURRENT record's stage
+                if (stageObj.enableMeasurement && stageObj.measurementLabel?.trim() === header) {
+                    val = item.measurement || "";
+                }
+                // 2. Check if this header matches any Additional Field Label of the CURRENT record's stage
+                else if (stageObj.additionalFieldLabels) {
+                    const fieldIndex = stageObj.additionalFieldLabels.findIndex(l => l?.trim() === header);
+                    if (fieldIndex !== -1) {
+                        val = item.additionalValues?.[fieldIndex] || "";
                     }
-                });
+                }
             }
-
-            row["Nhân Viên"] = item.employeeId;
-            row["Thời Gian"] = format(new Date(item.timestamp), 'yyyy-MM-dd HH:mm:ss');
-            row["Trạng Thái"] = statusText;
-            row["Ghi Chú"] = item.note || '';
-
-            return row;
+            
+            row[header] = val;
         });
 
-        const worksheet = utils.json_to_sheet(rows);
+        // End Columns
+        row["Nhân Viên"] = item.employeeId;
+        row["Trạng Thái"] = statusText;
+        row["Ghi Chú"] = item.note || '';
 
-        if (rows.length > 0) {
-            const wscols = Object.keys(rows[0]).map(key => ({ wch: Math.max(key.length + 5, 10) }));
-            worksheet['!cols'] = wscols;
-        }
-
-        const sheetName = (stage.name || `Stage ${stage.id}`)
-            .replace(/[:\\\/?*\[\]]/g, "")
-            .substring(0, 30);
-        
-        utils.book_append_sheet(workbook, worksheet, sheetName);
+        return row;
     });
+
+    const worksheet = utils.json_to_sheet(mergedRows);
+
+    // Calculate column widths based on headers
+    const basicCols = [
+        { wch: 6 },  // STT
+        { wch: 20 }, // Time
+        { wch: 25 }, // Stage Name
+        { wch: 20 }, // IMEI
+        { wch: 15 }, // Model
+    ];
+    
+    // Dynamic columns widths (auto-fit somewhat)
+    const dynamicCols = dynamicHeaderList.map(h => ({ wch: Math.max(h.length + 5, 15) }));
+    
+    const endCols = [
+        { wch: 15 }, // Employee
+        { wch: 15 }, // Status
+        { wch: 30 }  // Note
+    ];
+
+    worksheet['!cols'] = [...basicCols, ...dynamicCols, ...endCols];
+
+    utils.book_append_sheet(workbook, worksheet, "Dữ Liệu Chi Tiết");
 
     // 2. Export Inventory Summary
     const modelStats: Record<string, { input: Set<string>, output: Set<string> }> = {};
@@ -497,26 +561,19 @@ export default function App() {
     writeFile(workbook, `scan_process_data_${format(new Date(), 'yyyyMMdd_HHmmss')}.xls`);
   }, [history, stages]);
 
-  // RESET ONLY DATA, KEEP SETTINGS
   const resetSession = () => {
     if (confirm("CẢNH BÁO: Bạn có chắc muốn xóa lịch sử quét? \n\n(Cấu hình Công đoạn và Nhân viên sẽ được GIỮ NGUYÊN)")) {
-      // 1. Clear Data State
       setHistory([]);
       setProductProgress({});
       setProductStatus({});
       setProductInput('');
       setMeasurementValue('');
       
-      // 2. Explicitly update storage immediately to avoid race conditions
       localStorage.setItem('proscan_history', JSON.stringify([]));
       localStorage.setItem('proscan_progress', JSON.stringify({}));
       localStorage.setItem('proscan_status', JSON.stringify({}));
       
-      // NOTE: We do NOT remove 'proscan_stages', 'proscan_employees', or 'proscan_model_name'
-      // This ensures settings persist.
-      
       alert("Đã xóa dữ liệu ca làm việc mới!");
-      // No window.location.reload() needed
     }
   };
 
@@ -531,25 +588,13 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-2xl font-bold tracking-wide">Hệ Thống Quản Lý Sửa Chữa</h1>
-              <p className="text-slate-400 text-xs uppercase tracking-wider">Ver 4.6 (Persistent Mode)</p>
+              <p className="text-slate-400 text-xs uppercase tracking-wider">Ver 4.9 (Dynamic Excel)</p>
             </div>
           </div>
           
           <div className="flex flex-col md:flex-row items-center gap-2 w-full md:w-auto">
-             <div className="flex items-center bg-slate-800 rounded px-3 py-1.5 border border-slate-700">
-                 <Tag size={18} className="text-slate-400 mr-2" />
-                 <input
-                    ref={modelNameRef}
-                    type="text"
-                    className="bg-transparent text-white border-none focus:ring-0 text-base font-bold py-1 w-40 placeholder-slate-500 uppercase tracking-wide"
-                    placeholder="NHẬP TÊN MODEL"
-                    value={modelName}
-                    onChange={(e) => setModelName(e.target.value)}
-                  />
-             </div>
-             
              <div className="flex items-center gap-2">
-                <Button onClick={() => setIsSettingsOpen(true)} className="text-sm p-2.5 bg-slate-700 hover:bg-slate-600 border border-slate-600" title="Cấu hình công đoạn">
+                <Button onClick={() => setIsSettingsOpen(true)} className="text-sm p-2.5 bg-slate-700 hover:bg-slate-600 border border-slate-600" title="Cấu hình công đoạn & Model">
                   <Edit size={18} />
                 </Button>
                 
@@ -637,6 +682,43 @@ export default function App() {
                  <ScanLine size={20} /> NHẬP LIỆU
                </div>
                <div className="p-5 space-y-6">
+                  
+                  {/* NEW: Model Selection Chips (Replaced Input) */}
+                  <div className="space-y-2">
+                    <label className="block text-sm font-bold text-blue-800 mb-1 flex items-center gap-2">
+                       <Tag size={16}/> CHỌN MODEL (BẮT BUỘC)
+                    </label>
+                    
+                    {availableModels.length === 0 ? (
+                        <div className="p-3 bg-yellow-50 text-yellow-700 text-sm border border-yellow-200 rounded">
+                           Chưa có model nào. Vui lòng vào <b>Cấu hình</b> để thêm.
+                        </div>
+                    ) : (
+                        <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto p-1">
+                            {availableModels.map((model, idx) => (
+                                <button
+                                    key={idx}
+                                    onClick={() => handleModelSelect(model)}
+                                    className={`px-4 py-2 rounded-full text-sm font-bold border transition-all shadow-sm ${
+                                        modelName === model 
+                                        ? 'bg-blue-600 text-white border-blue-600 ring-2 ring-blue-300 scale-105' 
+                                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100 hover:border-gray-400'
+                                    }`}
+                                >
+                                    {model}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                    {modelName && (
+                        <div className="text-xs text-blue-600 font-semibold mt-1">
+                            Đang chọn: <span className="underline text-lg">{modelName}</span>
+                        </div>
+                    )}
+                  </div>
+
+                  <hr className="border-gray-100"/>
+
                   {/* Employee */}
                   <div>
                     <label className="block text-sm font-bold text-gray-600 mb-2">1. Nhân viên</label>
@@ -722,7 +804,7 @@ export default function App() {
                             : 'bg-white border-blue-600 ring-4 ring-blue-50/50'}
                         `}
                         placeholder={
-                          !modelName ? "⚠️ Nhập Tên Model trước" :
+                          !modelName ? "⚠️ Chọn MODEL trước" :
                           !currentEmployeeId ? "⚠️ Quét nhân viên trước" :
                           "Sẵn sàng scan IMEI..."
                         }
@@ -845,7 +927,11 @@ export default function App() {
       <StageSettingsModal 
         isOpen={isSettingsOpen}
         stages={stages}
-        onSave={setStages}
+        availableModels={availableModels}
+        onSave={(newStages, newModels) => {
+            setStages(newStages);
+            setAvailableModels(newModels);
+        }}
         onClose={() => setIsSettingsOpen(false)}
       />
     </div>

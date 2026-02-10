@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Save, X, Activity, ListPlus, CheckSquare, Upload, Trash2, ArrowRightLeft, Tag } from 'lucide-react';
+import { Save, X, Activity, ListPlus, CheckSquare, Upload, Trash2, ArrowRightLeft, Tag, Layers } from 'lucide-react';
 import { read, utils } from 'xlsx';
 import { Button } from './Button';
 import { Stage } from './types';
@@ -8,12 +8,14 @@ import { Stage } from './types';
 interface StageSettingsModalProps {
   isOpen: boolean;
   stages: Stage[];
-  onSave: (newStages: Stage[]) => void;
+  availableModels: string[]; // Receive current models
+  onSave: (newStages: Stage[], newModels: string[]) => void; // Pass back both
   onClose: () => void;
 }
 
-export const StageSettingsModal: React.FC<StageSettingsModalProps> = ({ isOpen, stages, onSave, onClose }) => {
+export const StageSettingsModal: React.FC<StageSettingsModalProps> = ({ isOpen, stages, availableModels, onSave, onClose }) => {
   const [localStages, setLocalStages] = useState<Stage[]>(stages);
+  const [localModelString, setLocalModelString] = useState<string>("");
 
   // Helper to ensure array is size 8
   const ensureSize8 = (arr?: string[]) => {
@@ -35,7 +37,10 @@ export const StageSettingsModal: React.FC<StageSettingsModalProps> = ({ isOpen, 
       statusLabels: s.statusLabels || { valid: "OK/ĐÃ SỬA", defect: "NG/TRẢ LẠI", error: "LỖI HỆ THỐNG" }
     }));
     setLocalStages(sanitizedStages);
-  }, [stages, isOpen]);
+    
+    // Initialize model string
+    setLocalModelString(availableModels.join('\n'));
+  }, [stages, availableModels, isOpen]);
 
   const handleNameChange = (id: number, newName: string) => {
     setLocalStages(prev => prev.map(s => s.id === id ? { ...s, name: newName } : s));
@@ -88,7 +93,6 @@ export const StageSettingsModal: React.FC<StageSettingsModalProps> = ({ isOpen, 
     }));
   };
 
-  // Upload handler for extended fields
   const handleFieldListUpload = async (e: React.ChangeEvent<HTMLInputElement>, stageId: number, fieldIndex: number) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -138,7 +142,13 @@ export const StageSettingsModal: React.FC<StageSettingsModalProps> = ({ isOpen, 
   };
 
   const handleSave = () => {
-    onSave(localStages);
+    // Parse models
+    const newModels = localModelString
+        .split('\n')
+        .map(m => m.trim().toUpperCase())
+        .filter(m => m !== "");
+        
+    onSave(localStages, newModels);
     onClose();
   };
 
@@ -149,7 +159,7 @@ export const StageSettingsModal: React.FC<StageSettingsModalProps> = ({ isOpen, 
       <div className="bg-white rounded-xl shadow-2xl max-w-6xl w-full mx-4 overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col max-h-[90vh]">
         <div className="bg-slate-900 text-white p-4 flex justify-between items-center flex-shrink-0">
           <h2 className="text-xl font-bold flex items-center gap-2">
-            ⚙️ Cấu hình Công Đoạn & Validate
+            ⚙️ Cấu hình Hệ Thống
           </h2>
           <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
             <X size={28} />
@@ -157,6 +167,27 @@ export const StageSettingsModal: React.FC<StageSettingsModalProps> = ({ isOpen, 
         </div>
         
         <div className="p-6 space-y-8 overflow-y-auto flex-1">
+          
+          {/* SECTION 1: MODEL CONFIGURATION */}
+          <div className="p-5 bg-blue-50 rounded-lg border border-blue-200 shadow-sm">
+             <h3 className="text-lg font-bold text-blue-800 flex items-center gap-2 mb-4">
+               <Layers size={24}/> Cấu hình Danh sách Model
+             </h3>
+             <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Nhập danh sách Model (Mỗi dòng 1 tên):</label>
+                <textarea
+                    className="w-full h-32 p-3 border border-blue-300 rounded focus:ring-2 focus:ring-blue-500 outline-none font-mono text-sm"
+                    value={localModelString}
+                    onChange={(e) => setLocalModelString(e.target.value)}
+                    placeholder="VD: IPHONE 13&#10;IPHONE 14&#10;SAMSUNG S23"
+                />
+                <p className="text-xs text-gray-500 mt-1">* Các tên này sẽ hiển thị dưới dạng nút bấm ở màn hình chính.</p>
+             </div>
+          </div>
+
+          <hr className="border-gray-200 my-4" />
+
+          {/* SECTION 2: STAGE CONFIGURATION */}
           {localStages.map((stage) => (
             <div key={stage.id} className="p-5 bg-gray-50 rounded-lg border border-gray-200 shadow-sm space-y-6">
               
