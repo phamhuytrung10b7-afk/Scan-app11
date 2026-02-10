@@ -710,11 +710,6 @@ export default function App() {
                             ))}
                         </div>
                     )}
-                    {modelName && (
-                        <div className="text-xs text-blue-600 font-semibold mt-1">
-                            Đang chọn: <span className="underline text-lg">{modelName}</span>
-                        </div>
-                    )}
                   </div>
 
                   <hr className="border-gray-100"/>
