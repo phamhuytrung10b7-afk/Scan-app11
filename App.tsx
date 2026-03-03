@@ -1,934 +1,989 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  LayoutDashboard, 
+  Database, 
+  CalendarRange, 
+  Plus, 
+  AlertCircle, 
+  CheckCircle2, 
+  Clock,
+  ChevronRight,
+  Settings,
+  Package,
+  Cpu,
+  Edit2,
+  Trash2,
+  X
+} from 'lucide-react';
+import { 
+  BarChart, 
+  Bar, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer, 
+  Cell,
+  PieChart,
+  Pie
+} from 'recharts';
+import { motion, AnimatePresence } from 'motion/react';
 
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Download, ScanLine, Users, CheckCircle, RefreshCw, Box, Settings, Layers, Edit, XCircle, Activity, List, Tag, Maximize, Minimize, AlertCircle, ChevronRight, PenTool, AlertTriangle, Clock, Plus } from 'lucide-react';
-import { format } from 'date-fns';
-import { utils, writeFile } from 'xlsx';
+// --- Types ---
 
-import { ScanRecord, ErrorState, DEFAULT_PROCESS_STAGES, Stage } from './types';
-import { Button } from './Button';
-import { ErrorModal } from './ErrorModal';
-import { StatCard } from './StatCard';
-import { StageSettingsModal } from './StageSettingsModal';
+interface Model {
+  id: number;
+  code: string;
+  name: string;
+}
 
-export default function App() {
-  // --- STATE WITH ROBUST PERSISTENCE ---
-  
-  // 1. Configuration (Stages) - Never lost on simple reset
-  const [stages, setStages] = useState<Stage[]>(() => {
-    try {
-      const saved = localStorage.getItem('proscan_stages');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-            if (parsed.length === 1) {
-                return [parsed[0], DEFAULT_PROCESS_STAGES[1]];
-            }
-            return parsed.map((s: any) => ({
-              ...s,
-              additionalFieldLabels: s.additionalFieldLabels ? [...s.additionalFieldLabels, ...Array(8).fill("")].slice(0, 8) : Array(8).fill(""),
-              additionalFieldDefaults: s.additionalFieldDefaults ? [...s.additionalFieldDefaults, ...Array(8).fill("")].slice(0, 8) : Array(8).fill(""),
-              additionalFieldValidationLists: s.additionalFieldValidationLists ? [...s.additionalFieldValidationLists, ...Array(8).fill("")].slice(0, 8) : Array(8).fill(""),
-              additionalFieldMins: s.additionalFieldMins ? [...s.additionalFieldMins, ...Array(8).fill("")].slice(0, 8) : Array(8).fill(""),
-              additionalFieldMaxs: s.additionalFieldMaxs ? [...s.additionalFieldMaxs, ...Array(8).fill("")].slice(0, 8) : Array(8).fill(""),
-              validationRules: s.validationRules || [],
-              statusLabels: s.statusLabels || { valid: "OK/ĐÃ SỬA", defect: "NG/TRẢ LẠI", error: "LỖI HỆ THỐNG" }
-            }));
-        }
-      }
-    } catch (e) {
-      console.error("Failed to load stages from storage", e);
-    }
-    return DEFAULT_PROCESS_STAGES;
-  });
+interface Component {
+  id: number;
+  code: string;
+  name: string;
+  standard_time_minutes: number;
+  setup_time_minutes: number;
+  buffer_time_minutes: number;
+}
 
-  // 2. Employees - Persist per session/reset
-  const [stageEmployees, setStageEmployees] = useState<Record<number, string>>(() => {
-    try {
-      const saved = localStorage.getItem('proscan_employees');
-      return saved ? JSON.parse(saved) : {};
-    } catch (e) { return {}; }
-  });
+interface RoadmapItem {
+  id: number;
+  plan_id: number;
+  component_id: number;
+  component_name: string;
+  component_code: string;
+  quantity: number;
+  start_date: string;
+  end_date: string;
+  leadtime_minutes: number;
+  is_bottleneck: boolean;
+}
 
-  // 3. Model Info & List
-  const [availableModels, setAvailableModels] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem('proscan_available_models');
-      return saved ? JSON.parse(saved) : ["IPHONE 13", "IPHONE 14", "SAMSUNG S23"];
-    } catch (e) { return ["IPHONE 13", "IPHONE 14", "SAMSUNG S23"]; }
-  });
+interface BOMItem {
+  id: number;
+  model_id: number;
+  component_id: number;
+  quantity: number;
+  component_name: string;
+  component_code: string;
+  standard_time_minutes: number;
+}
 
-  const [modelName, setModelName] = useState<string>(() => {
-    return localStorage.getItem('proscan_model_name') || '';
-  });
-  
-  // 4. App State
-  const [currentStage, setCurrentStage] = useState<number>(() => {
-    const saved = localStorage.getItem('proscan_active_stage');
-    return saved ? parseInt(saved) : 1;
-  });
+interface Capacity {
+  workers: number;
+  hours_per_day: number;
+}
 
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+interface Plan {
+  id: number;
+  model_id: number;
+  model_name: string;
+  model_code: string;
+  quantity: number;
+  start_date: string;
+  deadline: string;
+  estimated_completion_date: string;
+  gap_hours: number;
+  status: string;
+}
 
-  // 5. DATA (History & Progress)
-  const [history, setHistory] = useState<ScanRecord[]>(() => {
-    try {
-      const saved = localStorage.getItem('proscan_history');
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) { return []; }
-  });
+// --- Components ---
 
-  const [productProgress, setProductProgress] = useState<Record<string, number>>(() => {
-    try {
-      const saved = localStorage.getItem('proscan_progress');
-      return saved ? JSON.parse(saved) : {};
-    } catch (e) { return {}; }
-  });
+const Card = ({ children, title, icon: Icon, className = "" }: any) => (
+  <div className={`bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden ${className}`}>
+    {(title || Icon) && (
+      <div className="px-6 py-4 border-bottom border-slate-50 flex items-center justify-between">
+        <h3 className="font-semibold text-slate-800 flex items-center gap-2">
+          {Icon && <Icon className="w-4 h-4 text-indigo-500" />}
+          {title}
+        </h3>
+      </div>
+    )}
+    <div className="p-6">{children}</div>
+  </div>
+);
 
-  const [productStatus, setProductStatus] = useState<Record<string, 'valid' | 'defect'>>(() => {
-    try {
-      const saved = localStorage.getItem('proscan_status');
-      return saved ? JSON.parse(saved) : {};
-    } catch (e) { return {}; }
-  });
-  
-  // Inputs
-  const [employeeInput, setEmployeeInput] = useState('');
-  const [measurementValue, setMeasurementValue] = useState(''); 
-  const [productInput, setProductInput] = useState('');
-  const [additionalValues, setAdditionalValues] = useState<string[]>(Array(8).fill(""));
-  const [errorModal, setErrorModal] = useState<ErrorState>({ isOpen: false, message: '' });
-
-  // Refs
-  const employeeInputRef = useRef<HTMLInputElement>(null);
-  const measurementInputRef = useRef<HTMLInputElement>(null);
-  const productInputRef = useRef<HTMLInputElement>(null);
-  const extraInputRefs = useRef<(HTMLInputElement | null)[]>([]);
-
-  // Calculate stats for CURRENT stage
-  const validScanCount = history.filter(r => r.status === 'valid' && r.stage === currentStage).length;
-  const errorScanCount = history.filter(r => r.status === 'error' && r.stage === currentStage).length;
-
-  // Calculate pending inventory for stages > 1
-  const pendingCount = useMemo(() => {
-    if (currentStage === 1) return 0;
-    return Object.values(productProgress).filter(p => p === (currentStage - 1)).length;
-  }, [productProgress, currentStage]);
-
-  // --- IMMEDIATE PERSISTENCE EFFECTS (Save on Change) ---
-  useEffect(() => { localStorage.setItem('proscan_stages', JSON.stringify(stages)); }, [stages]);
-  useEffect(() => { localStorage.setItem('proscan_employees', JSON.stringify(stageEmployees)); }, [stageEmployees]);
-  useEffect(() => { localStorage.setItem('proscan_available_models', JSON.stringify(availableModels)); }, [availableModels]);
-  useEffect(() => { localStorage.setItem('proscan_model_name', modelName); }, [modelName]);
-  useEffect(() => { localStorage.setItem('proscan_active_stage', currentStage.toString()); }, [currentStage]);
-  
-  // Heavy data saving
-  useEffect(() => { localStorage.setItem('proscan_history', JSON.stringify(history)); }, [history]);
-  useEffect(() => { localStorage.setItem('proscan_progress', JSON.stringify(productProgress)); }, [productProgress]);
-  useEffect(() => { localStorage.setItem('proscan_status', JSON.stringify(productStatus)); }, [productStatus]);
-
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-    };
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, []);
-
-  // --- HELPER: Get Current Stage Object & Employee ---
-  const currentStageObj = useMemo(() => stages.find(s => s.id === currentStage) || stages[0], [stages, currentStage]);
-  const currentEmployeeId = stageEmployees[currentStage];
-  
-  const activeExtraFields = useMemo(() => {
-    if (!currentStageObj?.additionalFieldLabels) return [];
-    return currentStageObj.additionalFieldLabels.map((label, idx) => ({ label, idx })).filter(f => f.label.trim() !== "");
-  }, [currentStageObj]);
-
-  const loadDefaults = useCallback(() => {
-    if (currentStageObj?.additionalFieldDefaults) {
-      const defaults = [...currentStageObj.additionalFieldDefaults];
-      while(defaults.length < 8) defaults.push("");
-      setAdditionalValues(defaults);
-    } else {
-      setAdditionalValues(Array(8).fill(""));
-    }
-  }, [currentStageObj]);
-
-  useEffect(() => {
-    loadDefaults();
-  }, [currentStage, loadDefaults]);
-
-  // --- INITIAL FOCUS ---
-  useEffect(() => {
-    if (!currentEmployeeId) employeeInputRef.current?.focus();
-    else {
-      if (currentStageObj?.enableMeasurement) measurementInputRef.current?.focus();
-      else if (activeExtraFields.length > 0) extraInputRefs.current[activeExtraFields[0].idx]?.focus();
-      else productInputRef.current?.focus();
-    }
-  }, [currentStage, currentEmployeeId]);
-
-  // --- HANDLERS ---
-  const toggleFullScreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(err => console.error(err));
-    } else {
-      if (document.exitFullscreen) document.exitFullscreen();
-    }
-  };
-
-  const handleModelSelect = (model: string) => {
-    setModelName(model);
-    // Auto focus employee input if not set, or product input if set
-    setTimeout(() => {
-        if (!currentEmployeeId) employeeInputRef.current?.focus();
-        else productInputRef.current?.focus();
-    }, 50);
-  };
-
-  const handleEmployeeScan = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      const val = employeeInput.trim();
-      if (val) {
-        setStageEmployees(prev => ({ ...prev, [currentStage]: val }));
-        setEmployeeInput('');
-        setTimeout(() => {
-             if (currentStageObj?.enableMeasurement) measurementInputRef.current?.focus();
-             else if (activeExtraFields.length > 0) extraInputRefs.current[activeExtraFields[0].idx]?.focus();
-             else productInputRef.current?.focus();
-        }, 50);
-      }
-    }
-  };
-
-  const handleMeasurementScan = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      if (measurementValue.trim()) {
-        const nextField = activeExtraFields.find(f => !additionalValues[f.idx]);
-        if (nextField) {
-           extraInputRefs.current[nextField.idx]?.focus();
-        } else if (activeExtraFields.length > 0) {
-           const hasManualFields = activeExtraFields.some(f => !currentStageObj?.additionalFieldDefaults?.[f.idx]);
-           if (hasManualFields) {
-                const first = activeExtraFields[0];
-                extraInputRefs.current[first.idx]?.focus();
-           } else {
-             productInputRef.current?.focus();
-           }
-        } else {
-           productInputRef.current?.focus();
-        }
-      }
-    }
-  };
-
-  const handleExtraInputScan = (e: React.KeyboardEvent<HTMLInputElement>, index: number) => {
-    if (e.key === 'Enter') {
-      const currentActivePos = activeExtraFields.findIndex(f => f.idx === index);
-      
-      if (currentActivePos !== -1 && currentActivePos < activeExtraFields.length - 1) {
-         let nextActivePos = currentActivePos + 1;
-         let nextRealIdx = activeExtraFields[nextActivePos].idx;
-
-         if (nextActivePos < activeExtraFields.length) {
-            nextRealIdx = activeExtraFields[nextActivePos].idx;
-            extraInputRefs.current[nextRealIdx]?.focus();
-         } else {
-            productInputRef.current?.focus();
-         }
-      } else {
-         productInputRef.current?.focus();
-      }
-    }
-  };
-
-  const updateAdditionalValue = (index: number, value: string) => {
-    const newValues = [...additionalValues];
-    newValues[index] = value;
-    setAdditionalValues(newValues);
-  };
-
-  const handleError = (message: string, scannedCode: string = '') => {
-    const errorRecord: ScanRecord = {
-      id: crypto.randomUUID(),
-      stt: history.length + 1,
-      productCode: scannedCode || '---',
-      model: localStorage.getItem('proscan_current_model') || 'CHƯA CÓ',
-      modelName: modelName || '',
-      employeeId: currentEmployeeId || 'CHƯA CÓ',
-      timestamp: new Date().toISOString(),
-      status: 'error',
-      note: message,
-      stage: currentStage
-    };
-    setHistory(prev => [errorRecord, ...prev]);
-    setErrorModal({ isOpen: true, message });
-  };
-
-  const handleSuccess = (code: string) => {
-    setProductProgress(prev => ({ ...prev, [code]: currentStage }));
-    setProductStatus(prev => ({ ...prev, [code]: 'valid' }));
-
-    const newRecord: ScanRecord = {
-      id: crypto.randomUUID(),
-      stt: history.length + 1,
-      productCode: code,
-      model: localStorage.getItem('proscan_current_model') || '',
-      modelName: modelName,
-      employeeId: currentEmployeeId || 'UNKNOWN',
-      timestamp: new Date().toISOString(),
-      status: 'valid',
-      note: 'Thành công',
-      stage: currentStage,
-      measurement: currentStageObj?.enableMeasurement ? measurementValue : undefined,
-      additionalValues: [...additionalValues]
-    };
-
-    setHistory(prev => [newRecord, ...prev]);
-    
-    // Clear inputs
-    setProductInput('');
-    setMeasurementValue(''); 
-    loadDefaults();
-    
-    // Smart Focus Recovery
-    setTimeout(() => {
-        if (currentStageObj?.enableMeasurement) measurementInputRef.current?.focus();
-        else if (activeExtraFields.length > 0) extraInputRefs.current[activeExtraFields[0].idx]?.focus();
-        else productInputRef.current?.focus();
-    }, 50);
-  };
-
-  const handleProductScan = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      const code = productInput.trim();
-      if (!code) return;
-
-      // --- VALIDATIONS ---
-      if (!modelName.trim()) return handleError("Lỗi: Chưa chọn Tên Model (Click nút phía trên).", code);
-      if (!currentEmployeeId) return handleError(`Lỗi: Chưa xác định nhân viên cho công đoạn này.`, code);
-
-      // --- SEQUENCE CHECK ---
-      if (currentStage > 1) {
-         const previousStageDone = (productProgress[code] || 0) >= (currentStage - 1);
-         if (!previousStageDone) {
-             const prevStageName = stages.find(s => s.id === currentStage - 1)?.name || `Công đoạn ${currentStage - 1}`;
-             return handleError(`Lỗi quy trình: Mã này chưa hoàn thành "${prevStageName}".`, code);
-         }
-      }
-
-      // MEASUREMENT VALIDATION
-      if (currentStageObj?.enableMeasurement) {
-        const val = measurementValue.trim();
-        if (!val) {
-           measurementInputRef.current?.focus();
-           return handleError(`Lỗi: Công đoạn này yêu cầu nhập ${currentStageObj.measurementLabel || 'giá trị đo'}.`, code);
-        }
-
-        const standard = currentStageObj.measurementStandard?.trim();
-        if (standard) {
-          const stdNum = parseFloat(standard.replace(',', '.'));
-          const valNum = parseFloat(val.replace(',', '.'));
-
-          if (!isNaN(stdNum)) {
-             if (isNaN(valNum)) return handleError(`Lỗi: Tiêu chuẩn là số (${standard}), vui lòng nhập kết quả là số.`, code);
-             if (valNum >= stdNum) return handleError(`LỖI NG: Kết quả đo quá cao!\nTiêu chuẩn (Max): < ${standard}\nThực tế: ${val}`, code);
-          } else {
-             if (val.toUpperCase() !== standard.toUpperCase()) return handleError(`LỖI NG: Kết quả đo không đạt chuẩn!\nTiêu chuẩn: ${standard}\nThực tế: ${val}`, code);
-          }
-        }
-      }
-      
-      // VALIDATE EXTRA FIELDS
-      for (const field of activeExtraFields) {
-           const fieldVal = additionalValues[field.idx].trim();
-           if (!fieldVal && field.idx === activeExtraFields[0].idx) {
-             extraInputRefs.current[field.idx]?.focus();
-             return handleError(`Lỗi: Chưa nhập thông tin cho "${field.label}".`, code);
-           }
-
-           if (fieldVal) {
-                const whitelistString = currentStageObj.additionalFieldValidationLists?.[field.idx];
-                if (whitelistString && whitelistString.trim()) {
-                    const allowedValues = whitelistString.trim().split(/\s+/).map(s => s.toUpperCase());
-                    if (allowedValues.length > 0 && !allowedValues.includes(fieldVal.toUpperCase())) {
-                        extraInputRefs.current[field.idx]?.focus();
-                        return handleError(`LỖI: Giá trị "${fieldVal}" không nằm trong danh sách cho phép của "${field.label}".`, code);
-                    }
-                }
-
-                const minStr = currentStageObj.additionalFieldMins?.[field.idx]?.trim();
-                const maxStr = currentStageObj.additionalFieldMaxs?.[field.idx]?.trim();
-
-                if (minStr || maxStr) {
-                    const valNum = parseFloat(fieldVal.replace(',', '.'));
-                    if (isNaN(valNum)) {
-                        extraInputRefs.current[field.idx]?.focus();
-                        return handleError(`LỖI: "${field.label}" yêu cầu giá trị số.`, code);
-                    }
-                    if (minStr) {
-                        const min = parseFloat(minStr.replace(',', '.'));
-                        if (!isNaN(min) && valNum < min) {
-                            extraInputRefs.current[field.idx]?.focus();
-                            return handleError(`LỖI NG: Giá trị "${fieldVal}" thấp hơn mức tối thiểu (${min}) của "${field.label}".`, code);
-                        }
-                    }
-                    if (maxStr) {
-                        const max = parseFloat(maxStr.replace(',', '.'));
-                        if (!isNaN(max) && valNum > max) {
-                            extraInputRefs.current[field.idx]?.focus();
-                            return handleError(`LỖI NG: Giá trị "${fieldVal}" cao hơn mức tối đa (${max}) của "${field.label}".`, code);
-                        }
-                    }
-                }
-           }
-      }
-
-      // DUPLICATE CHECK
-      const currentProgress = productProgress[code] || 0;
-      if (currentProgress >= currentStage) {
-        return handleError(`Lỗi: Mã này đã được quét thành công trước đó (Tại công đoạn này).`, code);
-      }
-
-      handleSuccess(code);
-    }
-  };
-
-  const handleCloseError = () => {
-    setErrorModal({ isOpen: false, message: '' });
-    setProductInput('');
-    setTimeout(() => {
-      if (!modelName.trim()) {
-          // If no model, don't focus anything yet, visually they should select model
-      }
-      else if (!currentEmployeeId) employeeInputRef.current?.focus();
-      else if (currentStageObj?.enableMeasurement) {
-         if (!measurementValue) measurementInputRef.current?.focus();
-         else productInputRef.current?.focus();
-      }
-      else if (activeExtraFields.length > 0) {
-         extraInputRefs.current[activeExtraFields[0].idx]?.focus();
-      }
-      else productInputRef.current?.focus();
-    }, 50);
-  };
-
-  const exportExcel = useCallback(() => {
-    const workbook = utils.book_new();
-
-    // 1. MERGED DATA SHEET
-    // Get all valid history, sort by time DESC
-    const sortedHistory = [...history].sort((a, b) => 
-        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-    );
-
-    // COLLECT DYNAMIC HEADERS STRICTLY BY STAGE ORDER
-    // (Stage 1 Fields -> Stage 2 Fields -> etc.)
-    const dynamicHeaderList: string[] = [];
-    
-    stages.forEach(s => {
-        // 1. Measurement (if enabled for this stage)
-        if (s.enableMeasurement && s.measurementLabel) {
-            const label = s.measurementLabel.trim();
-            if (label && !dynamicHeaderList.includes(label)) {
-                dynamicHeaderList.push(label);
-            }
-        }
-        
-        // 2. Additional Fields (in order 1-8 for this stage)
-        s.additionalFieldLabels?.forEach(l => {
-            if (l && l.trim()) {
-                const label = l.trim();
-                // Prevent duplicates (though users usually configure distinct fields per stage)
-                if (!dynamicHeaderList.includes(label)) {
-                    dynamicHeaderList.push(label);
-                }
-            }
-        });
-    });
-
-    const mergedRows = sortedHistory.map((item, index) => {
-        const stageObj = stages.find(s => s.id === item.stage) || stages[0];
-        const labels = stageObj.statusLabels || { valid: "OK/ĐÃ SỬA", defect: "NG/TRẢ LẠI", error: "LỖI HỆ THỐNG" };
-        
-        let statusText = labels.error;
-        if (item.status === 'valid') statusText = labels.valid;
-        if (item.status === 'defect') statusText = labels.defect;
-
-        // Base Row
-        const row: any = {
-            "STT": index + 1,
-            "Thời Gian": format(new Date(item.timestamp), 'yyyy-MM-dd HH:mm:ss'),
-            "Công Đoạn": stageObj.name,
-            "Mã IMEI": item.productCode,
-            "Tên Model": item.modelName || '',
-        };
-
-        // Fill Dynamic Columns (Measurement & Extra Fields) based on the record's stage
-        dynamicHeaderList.forEach(header => {
-            let val = "";
-            
-            // Only fill data if this header actually belongs to the stage of this specific record
-            // OR if multiple stages share the same field name (e.g. "Notes"), fill it regardless.
-            // Priority: Check if the current record's stage configuration uses this header.
-            
-            if (stageObj) {
-                // 1. Check if this header matches the Measurement Label of the CURRENT record's stage
-                if (stageObj.enableMeasurement && stageObj.measurementLabel?.trim() === header) {
-                    val = item.measurement || "";
-                }
-                // 2. Check if this header matches any Additional Field Label of the CURRENT record's stage
-                else if (stageObj.additionalFieldLabels) {
-                    const fieldIndex = stageObj.additionalFieldLabels.findIndex(l => l?.trim() === header);
-                    if (fieldIndex !== -1) {
-                        val = item.additionalValues?.[fieldIndex] || "";
-                    }
-                }
-            }
-            
-            row[header] = val;
-        });
-
-        // End Columns
-        row["Nhân Viên"] = item.employeeId;
-        row["Trạng Thái"] = statusText;
-        row["Ghi Chú"] = item.note || '';
-
-        return row;
-    });
-
-    const worksheet = utils.json_to_sheet(mergedRows);
-
-    // Calculate column widths based on headers
-    const basicCols = [
-        { wch: 6 },  // STT
-        { wch: 20 }, // Time
-        { wch: 25 }, // Stage Name
-        { wch: 20 }, // IMEI
-        { wch: 15 }, // Model
-    ];
-    
-    // Dynamic columns widths (auto-fit somewhat)
-    const dynamicCols = dynamicHeaderList.map(h => ({ wch: Math.max(h.length + 5, 15) }));
-    
-    const endCols = [
-        { wch: 15 }, // Employee
-        { wch: 15 }, // Status
-        { wch: 30 }  // Note
-    ];
-
-    worksheet['!cols'] = [...basicCols, ...dynamicCols, ...endCols];
-
-    utils.book_append_sheet(workbook, worksheet, "Dữ Liệu Chi Tiết");
-
-    // 2. Export Inventory Summary
-    const modelStats: Record<string, { input: Set<string>, output: Set<string> }> = {};
-
-    history.forEach(item => {
-        if (item.status !== 'valid') return;
-        const model = (item.modelName || "N/A").trim().toUpperCase();
-        
-        if (!modelStats[model]) {
-            modelStats[model] = { input: new Set(), output: new Set() };
-        }
-
-        if (item.stage === 1) {
-            modelStats[model].input.add(item.productCode);
-        } else if (item.stage === 2) {
-            modelStats[model].output.add(item.productCode);
-        }
-    });
-
-    const summaryRows = Object.keys(modelStats).sort().map((model, idx) => {
-        const inputCount = modelStats[model].input.size;
-        const outputCount = modelStats[model].output.size;
-        return {
-            "STT": idx + 1,
-            "Tên Model": model,
-            "Tổng Nhập (Công đoạn 1)": inputCount,
-            "Tổng Xuất (Công đoạn 2)": outputCount,
-            "Tồn Kho (Chưa xuất)": inputCount - outputCount
-        };
-    });
-
-    const summaryWs = utils.json_to_sheet(summaryRows.length > 0 ? summaryRows : [{ "Thông báo": "Chưa có dữ liệu thống kê" }]);
-    const summaryCols = summaryRows.length > 0 ? Object.keys(summaryRows[0]).map(key => ({ wch: 22 })) : [{ wch: 30 }];
-    summaryWs['!cols'] = summaryCols;
-
-    utils.book_append_sheet(workbook, summaryWs, "Báo Cáo Tồn Kho");
-    
-    writeFile(workbook, `scan_process_data_${format(new Date(), 'yyyyMMdd_HHmmss')}.xls`);
-  }, [history, stages]);
-
-  const resetSession = () => {
-    if (confirm("CẢNH BÁO: Bạn có chắc muốn xóa lịch sử quét? \n\n(Cấu hình Công đoạn và Nhân viên sẽ được GIỮ NGUYÊN)")) {
-      setHistory([]);
-      setProductProgress({});
-      setProductStatus({});
-      setProductInput('');
-      setMeasurementValue('');
-      
-      localStorage.setItem('proscan_history', JSON.stringify([]));
-      localStorage.setItem('proscan_progress', JSON.stringify({}));
-      localStorage.setItem('proscan_status', JSON.stringify({}));
-      
-      alert("Đã xóa dữ liệu ca làm việc mới!");
-    }
+const StatCard = ({ label, value, subValue, icon: Icon, trend, color = "indigo" }: any) => {
+  const colorClasses: any = {
+    indigo: "bg-indigo-50 text-indigo-600",
+    emerald: "bg-emerald-50 text-emerald-600",
+    rose: "bg-rose-50 text-rose-600",
+    amber: "bg-amber-50 text-amber-600",
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-100 font-sans">
-      {/* Header */}
-      <header className="bg-slate-900 text-white p-3 shadow-lg sticky top-0 z-20">
-        <div className="w-full px-2 flex flex-col md:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="bg-blue-600 p-2 rounded-lg shadow-blue-500/50 shadow-lg">
-              <ScanLine size={32} />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold tracking-wide">Hệ Thống Quản Lý Sửa Chữa</h1>
-              <p className="text-slate-400 text-xs uppercase tracking-wider">Ver 4.9 (Dynamic Excel)</p>
-            </div>
-          </div>
-          
-          <div className="flex flex-col md:flex-row items-center gap-2 w-full md:w-auto">
-             <div className="flex items-center gap-2">
-                <Button onClick={() => setIsSettingsOpen(true)} className="text-sm p-2.5 bg-slate-700 hover:bg-slate-600 border border-slate-600" title="Cấu hình công đoạn & Model">
-                  <Edit size={18} />
-                </Button>
-                
-                <Button onClick={toggleFullScreen} className="text-sm p-2.5 bg-slate-700 hover:bg-slate-600 border border-slate-600" title="Toàn màn hình">
-                    {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
-                </Button>
+    <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-start justify-between">
+      <div>
+        <p className="text-sm font-medium text-slate-500 mb-1">{label}</p>
+        <h3 className="text-2xl font-bold text-slate-900">{value}</h3>
+        {subValue && <p className="text-xs text-slate-400 mt-1">{subValue}</p>}
+      </div>
+      <div className={`p-3 rounded-xl ${colorClasses[color]}`}>
+        <Icon className="w-6 h-6" />
+      </div>
+    </div>
+  );
+};
 
-                <Button onClick={exportExcel} variant="success" className="text-sm py-2 px-4">
-                  <Download size={18} className="mr-2 inline" /> Excel
-                </Button>
-                <Button onClick={resetSession} variant="secondary" className="text-sm py-2 px-4">
-                  <RefreshCw size={18} className="mr-2 inline" /> Reset
-                </Button>
-             </div>
-          </div>
+// --- Main App ---
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [models, setModels] = useState<Model[]>([]);
+  const [components, setComponents] = useState<Component[]>([]);
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [capacity, setCapacity] = useState<Capacity>({ workers: 0, hours_per_day: 0 });
+  const [loading, setLoading] = useState(true);
+
+  // Form States
+  const [newModel, setNewModel] = useState({ code: '', name: '' });
+  const [newComponent, setNewComponent] = useState({ code: '', name: '', standard_time_minutes: 0, setup_time_minutes: 0, buffer_time_minutes: 0 });
+  const [newPlan, setNewPlan] = useState({ model_id: 0, quantity: 0, start_date: '', deadline: '' });
+  const [newBOM, setNewBOM] = useState({ model_id: 0, component_id: 0, quantity: 1 });
+
+  // Roadmap State
+  const [selectedPlanRoadmap, setSelectedPlanRoadmap] = useState<RoadmapItem[] | null>(null);
+  const [viewingRoadmapId, setViewingRoadmapId] = useState<number | null>(null);
+
+  // Editing States
+  const [editingModel, setEditingModel] = useState<Model | null>(null);
+  const [editingComponent, setEditingComponent] = useState<Component | null>(null);
+  const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
+  const [editingBOM, setEditingBOM] = useState<BOMItem | null>(null);
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const [modelsRes, componentsRes, plansRes, capacityRes] = await Promise.all([
+        fetch('/api/models'),
+        fetch('/api/components'),
+        fetch('/api/plans'),
+        fetch('/api/capacity')
+      ]);
+      
+      setModels(await modelsRes.json());
+      setComponents(await componentsRes.json());
+      setPlans(await plansRes.json());
+      setCapacity(await capacityRes.json());
+    } catch (error) {
+      console.error("Failed to fetch data", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAddModel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await fetch('/api/models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newModel)
+    });
+    setNewModel({ code: '', name: '' });
+    fetchData();
+  };
+
+  const handleAddComponent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await fetch('/api/components', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newComponent)
+    });
+    setNewComponent({ code: '', name: '', standard_time_minutes: 0, setup_time_minutes: 0, buffer_time_minutes: 0 });
+    fetchData();
+  };
+
+  const fetchRoadmap = async (planId: number) => {
+    setViewingRoadmapId(planId);
+    const res = await fetch(`/api/plans/${planId}/roadmap`);
+    setSelectedPlanRoadmap(await res.json());
+  };
+
+  const handleAddPlan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const url = editingPlan ? `/api/plans/${editingPlan.id}` : '/api/plans';
+    const method = editingPlan ? 'PUT' : 'POST';
+    
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(editingPlan || newPlan)
+    });
+    if (res.ok) {
+      setNewPlan({ model_id: 0, quantity: 0, start_date: '', deadline: '' });
+      setEditingPlan(null);
+      fetchData();
+      setActiveTab('dashboard');
+    } else {
+      const err = await res.json();
+      alert(err.error);
+    }
+  };
+
+  const handleDeletePlan = async (id: number) => {
+    if (!confirm('Bạn có chắc chắn muốn xóa kế hoạch này?')) return;
+    await fetch(`/api/plans/${id}`, { method: 'DELETE' });
+    fetchData();
+  };
+
+  const handleEditModel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingModel) return;
+    await fetch(`/api/models/${editingModel.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(editingModel)
+    });
+    setEditingModel(null);
+    fetchData();
+  };
+
+  const handleDeleteModel = async (id: number) => {
+    if (!confirm('Xóa Model sẽ không xóa các kế hoạch liên quan nhưng có thể gây lỗi hiển thị. Bạn có chắc chắn?')) return;
+    await fetch(`/api/models/${id}`, { method: 'DELETE' });
+    fetchData();
+  };
+
+  const handleEditComponent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingComponent) return;
+    await fetch(`/api/components/${editingComponent.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(editingComponent)
+    });
+    setEditingComponent(null);
+    fetchData();
+  };
+
+  const handleDeleteComponent = async (id: number) => {
+    if (!confirm('Xóa linh kiện sẽ ảnh hưởng đến các BOM đang sử dụng nó. Tiếp tục?')) return;
+    await fetch(`/api/components/${id}`, { method: 'DELETE' });
+    fetchData();
+  };
+
+  const handleDeleteBOM = async (id: number) => {
+    if (!confirm('Xóa linh kiện này khỏi BOM?')) return;
+    await fetch(`/api/bom/${id}`, { method: 'DELETE' });
+    fetchBOM(currentModelId);
+  };
+
+  const [selectedModelBOM, setSelectedModelBOM] = useState<BOMItem[]>([]);
+  const [currentModelId, setCurrentModelId] = useState<number>(0);
+
+  const fetchBOM = async (modelId: number) => {
+    if (!modelId) return;
+    setCurrentModelId(modelId);
+    const res = await fetch(`/api/bom/${modelId}`);
+    setSelectedModelBOM(await res.json());
+  };
+
+  const handleAddBOM = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await fetch('/api/bom', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newBOM)
+    });
+    fetchBOM(newBOM.model_id);
+  };
+
+  const updateCapacity = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await fetch('/api/capacity', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(capacity)
+    });
+    fetchData();
+  };
+
+  const renderDashboard = () => {
+    const totalPlans = plans.length;
+    const delayedPlans = plans.filter(p => p.gap_hours > 0).length;
+    const onTimePlans = totalPlans - delayedPlans;
+
+    const chartData = plans.slice(0, 7).reverse().map(p => ({
+      name: p.model_code,
+      gap: Math.round(p.gap_hours),
+      status: p.gap_hours > 0 ? 'Delayed' : 'On Time'
+    }));
+
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <StatCard label="Tổng kế hoạch" value={totalPlans} icon={CalendarRange} color="indigo" />
+          <StatCard label="Đúng tiến độ" value={onTimePlans} icon={CheckCircle2} color="emerald" />
+          <StatCard label="Cảnh báo trễ" value={delayedPlans} icon={AlertCircle} color="rose" />
+          <StatCard label="Năng lực (Giờ/Ngày)" value={capacity.workers * capacity.hours_per_day} subValue={`${capacity.workers} nhân công`} icon={Clock} color="amber" />
         </div>
-      </header>
 
-      {/* Main Content */}
-      <main className="flex-1 p-4 md:p-6 w-full grid grid-cols-1 lg:grid-cols-3 gap-6">
-          
-          {/* TOP: STAGE SELECTION TABS */}
-          <div className="col-span-1 lg:col-span-3">
-            <div className="flex space-x-4 bg-white p-3 rounded-xl shadow-sm overflow-x-auto border border-gray-200">
-              {stages.map((stage) => (
-                <button
-                  key={stage.id}
-                  onClick={() => setCurrentStage(stage.id)}
-                  className={`px-8 py-5 rounded-lg font-bold text-xl tracking-wide whitespace-nowrap transition-all flex items-center gap-4 ${
-                    currentStage === stage.id
-                      ? 'bg-blue-600 text-white shadow-lg scale-105'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-800 border border-transparent hover:border-gray-300'
-                  }`}
-                >
-                  <span className={`px-3 py-1 rounded text-base ${currentStage === stage.id ? 'bg-white/20' : 'bg-gray-300 text-gray-700'}`}>
-                    {stage.id}
-                  </span>
-                  {stage.name}
-                  {currentStage === stage.id && <ChevronRight size={24} className="animate-pulse" />}
-                </button>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <Card title="Phân tích trễ hạn (Giờ)" icon={LayoutDashboard} className="lg:col-span-2">
+            <div className="h-80 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
+                  <Tooltip 
+                    cursor={{ fill: '#f8fafc' }}
+                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                  />
+                  <Bar dataKey="gap" radius={[4, 4, 0, 0]}>
+                    {chartData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.gap > 0 ? '#f43f5e' : '#10b981'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+
+          <Card title="Kế hoạch gần đây" icon={Clock}>
+            <div className="space-y-4">
+              {plans.slice(0, 5).map((plan) => (
+                <div key={plan.id} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-800">{plan.model_name}</p>
+                    <p className="text-xs text-slate-500">{plan.quantity} PCS • {plan.deadline}</p>
+                  </div>
+                  {plan.gap_hours > 0 ? (
+                    <span className="px-2 py-1 rounded-full bg-rose-100 text-rose-600 text-[10px] font-bold uppercase">Trễ {Math.round(plan.gap_hours)}h</span>
+                  ) : (
+                    <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-600 text-[10px] font-bold uppercase">Kịp</span>
+                  )}
+                </div>
               ))}
             </div>
-          </div>
+          </Card>
+        </div>
 
-          {/* LEFT: INPUTS & STATS */}
-          <div className="lg:col-span-1 space-y-4">
-            
-            <div className="bg-blue-600 text-white p-5 rounded-lg shadow-md flex flex-col justify-center transition-all duration-300">
-                <h3 className="text-xs uppercase font-bold opacity-70 mb-1 tracking-wider">KHU VỰC LÀM VIỆC</h3>
-                <div className="text-xl font-bold flex items-center gap-2 truncate tracking-wide">
-                    <Layers size={24} /> <span className="truncate">{currentStageObj?.name || `Trạm kiểm tra`}</span>
-                </div>
-                {currentEmployeeId && (
-                    <div className="mt-2 text-sm bg-blue-700/50 p-1 px-3 rounded inline-block w-fit">
-                        NV: <b>{currentEmployeeId}</b>
-                    </div>
-                )}
-            </div>
-
-            <div className={`grid gap-3 ${currentStage > 1 ? 'grid-cols-2 md:grid-cols-3' : 'grid-cols-2'}`}>
-                {currentStage > 1 && (
-                  <StatCard 
-                    title="TỒN CHƯA XUẤT" 
-                    value={pendingCount} 
-                    type="warning" 
-                    icon={<Clock size={24} />} 
-                  />
-                )}
-                <StatCard 
-                  title={currentStageObj.statusLabels?.valid || "OK/ĐÃ SỬA"} 
-                  value={validScanCount} 
-                  type="success" 
-                  icon={<CheckCircle size={24} />} 
-                />
-                <StatCard 
-                  title={currentStageObj.statusLabels?.error || "LỖI HỆ THỐNG"} 
-                  value={errorScanCount} 
-                  type="neutral" 
-                  icon={<AlertCircle size={24} />} 
-                />
-            </div>
-
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-               <div className="p-4 bg-gray-50 border-b border-gray-200 font-bold text-gray-700 flex items-center gap-2 text-base uppercase tracking-wide">
-                 <ScanLine size={20} /> NHẬP LIỆU
-               </div>
-               <div className="p-5 space-y-6">
-                  
-                  {/* NEW: Model Selection Chips (Replaced Input) */}
-                  <div className="space-y-2">
-                    <label className="block text-sm font-bold text-blue-800 mb-1 flex items-center gap-2">
-                       <Tag size={16}/> CHỌN MODEL (BẮT BUỘC)
-                    </label>
-                    
-                    {availableModels.length === 0 ? (
-                        <div className="p-3 bg-yellow-50 text-yellow-700 text-sm border border-yellow-200 rounded">
-                           Chưa có model nào. Vui lòng vào <b>Cấu hình</b> để thêm.
+        <Card title="Danh sách kế hoạch chi tiết" icon={CalendarRange}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-slate-100">
+                  <th className="pb-4 font-semibold text-slate-600 text-sm">Model</th>
+                  <th className="pb-4 font-semibold text-slate-600 text-sm">Số lượng</th>
+                  <th className="pb-4 font-semibold text-slate-600 text-sm">Bắt đầu</th>
+                  <th className="pb-4 font-semibold text-slate-600 text-sm">Deadline</th>
+                  <th className="pb-4 font-semibold text-slate-600 text-sm">Dự kiến xong</th>
+                  <th className="pb-4 font-semibold text-slate-600 text-sm">Trạng thái</th>
+                  <th className="pb-4 font-semibold text-slate-600 text-sm text-right">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {plans.map((plan) => (
+                  <tr key={plan.id} className="hover:bg-slate-50/50 transition-colors">
+                    <td className="py-4">
+                      <div className="font-medium text-slate-900">{plan.model_name}</div>
+                      <div className="text-xs text-slate-400">{plan.model_code}</div>
+                    </td>
+                    <td className="py-4 text-sm text-slate-600 font-mono">{plan.quantity}</td>
+                    <td className="py-4 text-sm text-slate-600">{plan.start_date}</td>
+                    <td className="py-4 text-sm text-slate-600">{plan.deadline}</td>
+                    <td className="py-4 text-sm text-slate-600">{plan.estimated_completion_date}</td>
+                    <td className="py-4">
+                      {plan.gap_hours > 0 ? (
+                        <div className="flex items-center gap-1.5 text-rose-600 font-medium text-sm">
+                          <AlertCircle className="w-4 h-4" />
+                          Trễ {Math.round(plan.gap_hours)}h
                         </div>
-                    ) : (
-                        <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto p-1">
-                            {availableModels.map((model, idx) => (
-                                <button
-                                    key={idx}
-                                    onClick={() => handleModelSelect(model)}
-                                    className={`px-4 py-2 rounded-full text-sm font-bold border transition-all shadow-sm ${
-                                        modelName === model 
-                                        ? 'bg-blue-600 text-white border-blue-600 ring-2 ring-blue-300 scale-105' 
-                                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100 hover:border-gray-400'
-                                    }`}
-                                >
-                                    {model}
-                                </button>
-                            ))}
-                        </div>
-                    )}
-                  </div>
-
-                  <hr className="border-gray-100"/>
-
-                  {/* Employee */}
-                  <div>
-                    <label className="block text-sm font-bold text-gray-600 mb-2">1. Nhân viên</label>
-                    <div className="relative">
-                      <input
-                        ref={employeeInputRef}
-                        className={`w-full text-lg p-3 pl-10 border rounded focus:outline-none transition-colors tracking-wide ${currentEmployeeId ? 'border-green-300 bg-green-50 focus:border-green-500' : 'border-gray-300 focus:border-blue-500'}`}
-                        placeholder={currentEmployeeId ? "Đổi nhân viên..." : "Scan mã NV để bắt đầu..."}
-                        value={employeeInput}
-                        onChange={e => setEmployeeInput(e.target.value)}
-                        onKeyDown={handleEmployeeScan}
-                      />
-                      <Users className="absolute left-3 top-3.5 text-gray-400" size={20} />
-                      {currentEmployeeId && (
-                        <div className="absolute right-2 top-3 text-green-700 font-bold text-xs bg-green-200 px-2 py-1 rounded border border-green-300">
-                          {currentEmployeeId}
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-emerald-600 font-medium text-sm">
+                          <CheckCircle2 className="w-4 h-4" />
+                          Khả thi
                         </div>
                       )}
-                    </div>
-                  </div>
-                  
-                  <hr className="border-gray-100"/>
+                    </td>
+                    <td className="py-4 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <button 
+                          onClick={() => fetchRoadmap(plan.id)}
+                          className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors flex items-center gap-1 text-xs font-bold"
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                          Roadmap
+                        </button>
+                        <button 
+                          onClick={() => {
+                            setEditingPlan(plan);
+                            setActiveTab('planning');
+                          }}
+                          className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button 
+                          onClick={() => handleDeletePlan(plan.id)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
 
-                  {/* Measurement Input */}
-                  {currentStageObj?.enableMeasurement && (
-                    <div className="animate-in fade-in slide-in-from-top-2 duration-300 space-y-3">
+        <AnimatePresence>
+          {selectedPlanRoadmap && (
+            <motion.div 
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="mt-6"
+            >
+              <Card title={`Lộ trình sản xuất chi tiết (Plan #${viewingRoadmapId})`} icon={CalendarRange}>
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {selectedPlanRoadmap.map((item) => (
+                      <div 
+                        key={item.id} 
+                        className={`p-4 rounded-2xl border transition-all ${item.is_bottleneck ? 'bg-amber-50 border-amber-200' : 'bg-white border-slate-100'}`}
+                      >
+                        <div className="flex justify-between items-start mb-3">
+                          <div>
+                            <h4 className="font-bold text-slate-900">{item.component_name}</h4>
+                            <p className="text-xs text-slate-500">{item.component_code} • {item.quantity} PCS</p>
+                          </div>
+                          {item.is_bottleneck && (
+                            <span className="px-2 py-1 rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold uppercase flex items-center gap-1">
+                              <AlertCircle className="w-3 h-3" /> Điểm nghẽn
+                            </span>
+                          )}
+                        </div>
+                        
+                        <div className="grid grid-cols-2 gap-4 text-sm">
+                          <div>
+                            <p className="text-[10px] text-slate-400 uppercase font-bold">Bắt đầu muộn nhất</p>
+                            <p className="font-semibold text-slate-700">{item.start_date}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] text-slate-400 uppercase font-bold">Hoàn thành</p>
+                            <p className="font-semibold text-slate-700">{item.end_date}</p>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 pt-4 border-t border-slate-100 flex justify-between items-center">
+                          <p className="text-xs text-slate-500">
+                            Leadtime: <span className="font-bold text-slate-700">{Math.round(item.leadtime_minutes)} phút</span>
+                          </p>
+                          <div className="h-1.5 w-24 bg-slate-100 rounded-full overflow-hidden">
+                            <div 
+                              className={`h-full rounded-full ${item.is_bottleneck ? 'bg-amber-500' : 'bg-indigo-500'}`} 
+                              style={{ width: '100%' }} 
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <button 
+                    onClick={() => setSelectedPlanRoadmap(null)}
+                    className="w-full py-2 text-sm text-slate-400 hover:text-slate-600 font-medium"
+                  >
+                    Đóng lộ trình
+                  </button>
+                </div>
+              </Card>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  };
+
+  const renderMasterData = () => {
+    return (
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="space-y-6">
+          <Card title="Quản lý Model" icon={Package}>
+            <form onSubmit={handleAddModel} className="flex gap-2 mb-6">
+              <input 
+                type="text" 
+                placeholder="Mã Model" 
+                className="flex-1 px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                value={newModel.code || ''}
+                onChange={e => setNewModel({...newModel, code: e.target.value})}
+                required
+              />
+              <input 
+                type="text" 
+                placeholder="Tên Model" 
+                className="flex-1 px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                value={newModel.name || ''}
+                onChange={e => setNewModel({...newModel, name: e.target.value})}
+                required
+              />
+              <button type="submit" className="p-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors">
+                <Plus className="w-5 h-5" />
+              </button>
+            </form>
+            <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
+              {models.map(m => (
+                <div key={m.id} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100 group">
+                  {editingModel?.id === m.id ? (
+                    <form onSubmit={handleEditModel} className="flex gap-2 w-full">
+                      <input 
+                        type="text" 
+                        className="flex-1 px-2 py-1 rounded border text-sm"
+                        value={editingModel.code || ''}
+                        onChange={e => setEditingModel({...editingModel, code: e.target.value})}
+                      />
+                      <input 
+                        type="text" 
+                        className="flex-1 px-2 py-1 rounded border text-sm"
+                        value={editingModel.name || ''}
+                        onChange={e => setEditingModel({...editingModel, name: e.target.value})}
+                      />
+                      <button type="submit" className="text-emerald-600"><CheckCircle2 className="w-4 h-4" /></button>
+                      <button type="button" onClick={() => setEditingModel(null)} className="text-slate-400"><X className="w-4 h-4" /></button>
+                    </form>
+                  ) : (
+                    <>
                       <div>
-                        <label className="block text-sm font-bold text-purple-700 mb-2 flex items-center gap-2">
-                          <Activity size={18} className="text-purple-600"/>
-                          2. {currentStageObj.measurementLabel || "Kết quả"} (Bắt buộc)
-                        </label>
-                        <input
-                          ref={measurementInputRef}
-                          className="w-full text-lg p-3 border-2 border-purple-300 bg-purple-50 rounded focus:border-purple-500 focus:outline-none placeholder-purple-300 tracking-wide"
-                          placeholder={currentStageObj.measurementStandard ? `Nhập giá trị (Chuẩn: ${currentStageObj.measurementStandard})...` : `Nhập ${currentStageObj.measurementLabel || "giá trị"}...`}
-                          value={measurementValue}
-                          onChange={e => setMeasurementValue(e.target.value)}
-                          onKeyDown={handleMeasurementScan}
+                        <p className="text-sm font-semibold text-slate-800">{m.name}</p>
+                        <p className="text-xs text-slate-400">{m.code}</p>
+                      </div>
+                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => setEditingModel(m)} className="p-1 text-slate-400 hover:text-indigo-600"><Edit2 className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => handleDeleteModel(m.id)} className="p-1 text-slate-400 hover:text-rose-600"><Trash2 className="w-3.5 h-3.5" /></button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          <Card title="Quản lý Linh kiện (Khay)" icon={Cpu}>
+            <form onSubmit={handleAddComponent} className="space-y-3 mb-6">
+              <div className="flex gap-2">
+                <input 
+                  type="text" 
+                  placeholder="Mã Linh kiện" 
+                  className="flex-1 px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                  value={newComponent.code || ''}
+                  onChange={e => setNewComponent({...newComponent, code: e.target.value})}
+                  required
+                />
+                <input 
+                  type="text" 
+                  placeholder="Tên Linh kiện" 
+                  className="flex-1 px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                  value={newComponent.name || ''}
+                  onChange={e => setNewComponent({...newComponent, name: e.target.value})}
+                  required
+                />
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <input 
+                  type="number" 
+                  placeholder="Chuẩn (phút)" 
+                  className="px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                  value={newComponent.standard_time_minutes === 0 ? '0' : (newComponent.standard_time_minutes || '')}
+                  onChange={e => setNewComponent({...newComponent, standard_time_minutes: e.target.value === '' ? 0 : parseFloat(e.target.value)})}
+                  required
+                />
+                <input 
+                  type="number" 
+                  placeholder="Setup (phút)" 
+                  className="px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                  value={newComponent.setup_time_minutes === 0 ? '0' : (newComponent.setup_time_minutes || '')}
+                  onChange={e => setNewComponent({...newComponent, setup_time_minutes: e.target.value === '' ? 0 : parseFloat(e.target.value)})}
+                />
+                <input 
+                  type="number" 
+                  placeholder="Buffer (phút)" 
+                  className="px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                  value={newComponent.buffer_time_minutes === 0 ? '0' : (newComponent.buffer_time_minutes || '')}
+                  onChange={e => setNewComponent({...newComponent, buffer_time_minutes: e.target.value === '' ? 0 : parseFloat(e.target.value)})}
+                />
+              </div>
+              <button type="submit" className="w-full py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2 text-sm font-medium">
+                <Plus className="w-4 h-4" /> Thêm linh kiện
+              </button>
+            </form>
+            <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
+              {components.map(c => (
+                <div key={c.id} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100 group">
+                  {editingComponent?.id === c.id ? (
+                    <form onSubmit={handleEditComponent} className="flex flex-col gap-2 w-full">
+                      <div className="flex gap-2">
+                        <input 
+                          type="text" 
+                          className="flex-1 px-2 py-1 rounded border text-sm"
+                          value={editingComponent.code || ''}
+                          onChange={e => setEditingComponent({...editingComponent, code: e.target.value})}
+                        />
+                        <input 
+                          type="text" 
+                          className="flex-1 px-2 py-1 rounded border text-sm"
+                          value={editingComponent.name || ''}
+                          onChange={e => setEditingComponent({...editingComponent, name: e.target.value})}
                         />
                       </div>
-                    </div>
+                      <div className="grid grid-cols-3 gap-2 items-center">
+                        <input 
+                          type="number" 
+                          className="px-2 py-1 rounded border text-sm"
+                          value={editingComponent.standard_time_minutes === 0 ? '0' : (editingComponent.standard_time_minutes || '')}
+                          onChange={e => setEditingComponent({...editingComponent, standard_time_minutes: e.target.value === '' ? 0 : parseFloat(e.target.value)})}
+                        />
+                        <input 
+                          type="number" 
+                          className="px-2 py-1 rounded border text-sm"
+                          value={editingComponent.setup_time_minutes === 0 ? '0' : (editingComponent.setup_time_minutes || '')}
+                          onChange={e => setEditingComponent({...editingComponent, setup_time_minutes: e.target.value === '' ? 0 : parseFloat(e.target.value)})}
+                        />
+                        <input 
+                          type="number" 
+                          className="px-2 py-1 rounded border text-sm"
+                          value={editingComponent.buffer_time_minutes === 0 ? '0' : (editingComponent.buffer_time_minutes || '')}
+                          onChange={e => setEditingComponent({...editingComponent, buffer_time_minutes: e.target.value === '' ? 0 : parseFloat(e.target.value)})}
+                        />
+                      </div>
+                      <div className="flex justify-end gap-2">
+                        <button type="submit" className="text-emerald-600"><CheckCircle2 className="w-4 h-4" /></button>
+                        <button type="button" onClick={() => setEditingComponent(null)} className="text-slate-400"><X className="w-4 h-4" /></button>
+                      </div>
+                    </form>
+                  ) : (
+                    <>
+                      <div>
+                        <p className="text-sm font-semibold text-slate-800">{c.name}</p>
+                        <p className="text-[10px] text-slate-400">{c.code} • Chuẩn: {c.standard_time_minutes}m • Setup: {c.setup_time_minutes}m • Buffer: {c.buffer_time_minutes}m</p>
+                      </div>
+                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => setEditingComponent(c)} className="p-1 text-slate-400 hover:text-indigo-600"><Edit2 className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => handleDeleteComponent(c.id)} className="p-1 text-slate-400 hover:text-rose-600"><Trash2 className="w-3.5 h-3.5" /></button>
+                      </div>
+                    </>
                   )}
-                  
-                  {/* Extra Fields (Dynamic Error Inputs) */}
-                  {activeExtraFields.length > 0 && (
-                        <div className="bg-gray-50 p-4 rounded border border-gray-200 animate-in fade-in slide-in-from-top-2 duration-300">
-                           <label className="block text-sm font-bold text-gray-500 mb-3 uppercase flex items-center gap-2 tracking-wide">
-                             <List size={14}/> Thông tin chi tiết (Lỗi/Linh kiện)
-                           </label>
-                           {/* Use grid-cols-1 on small screens, cols-2 on medium to accomodate longer error descriptions */}
-                           <div className="grid grid-cols-1 gap-4">
-                              {activeExtraFields.map((field) => (
-                                <div key={field.idx}>
-                                   <label className="block text-xs font-bold text-blue-800 mb-1.5 truncate flex items-center gap-1.5 tracking-wide" title={field.label}>
-                                      <PenTool size={12} /> {field.label}
-                                   </label>
-                                   <input
-                                      ref={(el) => { extraInputRefs.current[field.idx] = el; }}
-                                      value={additionalValues[field.idx]}
-                                      onChange={(e) => updateAdditionalValue(field.idx, e.target.value)}
-                                      onKeyDown={(e) => handleExtraInputScan(e, field.idx)}
-                                      className="w-full p-2.5 text-base border border-gray-300 rounded focus:border-blue-500 focus:ring-1 focus:ring-blue-200 outline-none bg-white shadow-sm tracking-wide"
-                                      placeholder={currentStageObj.additionalFieldDefaults?.[field.idx] ? `Mặc định: ${currentStageObj.additionalFieldDefaults?.[field.idx]}` : "Nhập thông tin..."}
-                                   />
-                                </div>
-                              ))}
-                           </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+
+        <div className="space-y-6">
+          <Card title="Định mức nguyên vật liệu (BOM)" icon={Settings}>
+            <form onSubmit={handleAddBOM} className="space-y-3 mb-6">
+              <select 
+                className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                value={newBOM.model_id || ''}
+                onChange={e => {
+                  const id = parseInt(e.target.value);
+                  setNewBOM({...newBOM, model_id: id});
+                  fetchBOM(id);
+                }}
+                required
+              >
+                <option value="">Chọn Model</option>
+                {models.map(m => <option key={m.id} value={m.id}>{m.name} ({m.code})</option>)}
+              </select>
+              <div className="flex gap-2">
+                <select 
+                  className="flex-1 px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                  value={newBOM.component_id || ''}
+                  onChange={e => setNewBOM({...newBOM, component_id: parseInt(e.target.value)})}
+                  required
+                >
+                  <option value="">Chọn Linh kiện</option>
+                  {components.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+                <input 
+                  type="number" 
+                  placeholder="SL/Model" 
+                  className="w-24 px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                  value={newBOM.quantity === 0 ? '0' : (newBOM.quantity || '')}
+                  onChange={e => setNewBOM({...newBOM, quantity: e.target.value === '' ? 0 : parseInt(e.target.value)})}
+                  required
+                />
+                <button type="submit" className="p-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors">
+                  <Plus className="w-5 h-5" />
+                </button>
+              </div>
+            </form>
+            
+            {currentModelId > 0 ? (
+              <div className="space-y-2">
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Linh kiện trong BOM:</h4>
+                {selectedModelBOM.length > 0 ? (
+                  selectedModelBOM.map(item => (
+                    <div key={item.id} className="flex items-center justify-between p-3 rounded-xl bg-indigo-50/50 border border-indigo-100 group">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-800">{item.component_name}</p>
+                        <p className="text-xs text-slate-500">{item.component_code}</p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="text-right">
+                          <p className="text-sm font-bold text-indigo-600">x{item.quantity}</p>
+                          <p className="text-[10px] text-slate-400">{item.standard_time_minutes}m/đv</p>
                         </div>
-                  )}
-
-                  {/* Product */}
-                  <div>
-                    <label className="block text-sm font-bold text-gray-600 mb-2">
-                      {currentStageObj?.enableMeasurement || activeExtraFields.length > 0 ? "3" : "2"}. Mã IMEI máy (Enter để lưu)
-                    </label>
-                    <div className="relative">
-                      <input
-                        ref={productInputRef}
-                        disabled={errorModal.isOpen}
-                        className={`w-full text-2xl font-mono p-4 pl-12 border rounded shadow-inner focus:outline-none transition-colors tracking-wide
-                          ${errorModal.isOpen 
-                            ? 'bg-gray-100 cursor-not-allowed border-gray-300' 
-                            : 'bg-white border-blue-600 ring-4 ring-blue-50/50'}
-                        `}
-                        placeholder={
-                          !modelName ? "⚠️ Chọn MODEL trước" :
-                          !currentEmployeeId ? "⚠️ Quét nhân viên trước" :
-                          "Sẵn sàng scan IMEI..."
-                        }
-                        value={productInput}
-                        onChange={e => setProductInput(e.target.value)}
-                        onKeyDown={handleProductScan}
-                      />
-                      <Box className={`absolute left-3 top-1/2 -translate-y-1/2 ${currentEmployeeId && modelName ? 'text-blue-600' : 'text-gray-400'}`} size={28} />
+                        <button 
+                          onClick={() => handleDeleteBOM(item.id)}
+                          className="p-1 text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-slate-400 italic">Chưa có linh kiện nào trong BOM này.</p>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-400 mb-4 italic text-center py-8 border-2 border-dashed border-slate-100 rounded-2xl">
+                Chọn Model để xem và chỉnh sửa BOM
+              </p>
+            )}
+          </Card>
+
+          <Card title="Năng lực sản xuất" icon={Clock}>
+            <form onSubmit={updateCapacity} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-slate-500 mb-1">Số nhân công/máy</label>
+                  <input 
+                    type="number" 
+                    className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                    value={capacity.workers === 0 ? '0' : (capacity.workers || '')}
+                    onChange={e => setCapacity({...capacity, workers: e.target.value === '' ? 0 : parseInt(e.target.value)})}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-500 mb-1">Giờ làm việc/ngày</label>
+                  <input 
+                    type="number" 
+                    step="0.5"
+                    className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                    value={capacity.hours_per_day === 0 ? '0' : (capacity.hours_per_day || '')}
+                    onChange={e => setCapacity({...capacity, hours_per_day: e.target.value === '' ? 0 : parseFloat(e.target.value)})}
+                  />
+                </div>
+              </div>
+              <button type="submit" className="w-full py-2 bg-slate-800 text-white rounded-xl hover:bg-slate-900 transition-colors text-sm font-medium">
+                Cập nhật năng lực
+              </button>
+            </form>
+          </Card>
+        </div>
+      </div>
+    );
+  };
+
+  const renderPlanning = () => {
+    const isEditing = !!editingPlan;
+    const planData = editingPlan || newPlan;
+
+    return (
+      <div className="max-w-2xl mx-auto">
+        <Card title={isEditing ? "Chỉnh sửa kế hoạch" : "Tạo kế hoạch sản xuất mới"} icon={CalendarRange}>
+          <form onSubmit={handleAddPlan} className="space-y-6">
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Sản phẩm (Model)</label>
+                <select 
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none"
+                  value={planData.model_id || ''}
+                  onChange={e => {
+                    const val = parseInt(e.target.value);
+                    isEditing ? setEditingPlan({...editingPlan, model_id: val}) : setNewPlan({...newPlan, model_id: val});
+                  }}
+                  required
+                >
+                  <option value="">Chọn Model cần sản xuất</option>
+                  {models.map(m => <option key={m.id} value={m.id}>{m.name} ({m.code})</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Số lượng (PCS)</label>
+                <input 
+                  type="number" 
+                  placeholder="Ví dụ: 500"
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none"
+                  value={planData.quantity === 0 ? '0' : (planData.quantity || '')}
+                  onChange={e => {
+                    const val = e.target.value === '' ? 0 : parseInt(e.target.value);
+                    isEditing ? setEditingPlan({...editingPlan, quantity: val}) : setNewPlan({...newPlan, quantity: val});
+                  }}
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Ngày bắt đầu</label>
+                  <input 
+                    type="date" 
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none"
+                    value={planData.start_date || ''}
+                    onChange={e => {
+                      const val = e.target.value;
+                      isEditing ? setEditingPlan({...editingPlan, start_date: val}) : setNewPlan({...newPlan, start_date: val});
+                    }}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Hạn chót (Deadline)</label>
+                  <input 
+                    type="date" 
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none"
+                    value={planData.deadline || ''}
+                    onChange={e => {
+                      const val = e.target.value;
+                      isEditing ? setEditingPlan({...editingPlan, deadline: val}) : setNewPlan({...newPlan, deadline: val});
+                    }}
+                    required
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 bg-indigo-50 rounded-2xl border border-indigo-100 space-y-4">
+              <div className="flex gap-3">
+                <div className="p-2 bg-white rounded-lg shadow-sm h-fit">
+                  <Settings className="w-5 h-5 text-indigo-600" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-indigo-900">Giải thích Thuật toán</h4>
+                  <div className="text-xs text-indigo-700 mt-2 space-y-2 leading-relaxed">
+                    <p><strong>1. Leadtime Linh kiện:</strong> (Số lượng × Thời gian chuẩn) + Setup time + Buffer time.</p>
+                    <p><strong>2. Lập lịch ngược (Backward):</strong> Dựa trên Deadline, hệ thống tính ngược lại ngày bắt đầu muộn nhất cho từng linh kiện (loại trừ Chủ Nhật).</p>
+                    <p><strong>3. Phân bổ nguồn lực:</strong> Linh kiện có Leadtime dài nhất được ưu tiên sắp xếp trước.</p>
+                    <p><strong>4. Cảnh báo điểm nghẽn:</strong> Nếu Leadtime linh kiện vượt quá quỹ thời gian 1 ca làm việc, hệ thống sẽ đánh dấu màu vàng.</p>
                   </div>
-               </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              {isEditing && (
+                <button 
+                  type="button"
+                  onClick={() => {
+                    setEditingPlan(null);
+                    setActiveTab('dashboard');
+                  }}
+                  className="flex-1 py-4 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-all font-bold"
+                >
+                  Hủy bỏ
+                </button>
+              )}
+              <button 
+                type="submit" 
+                className="flex-[2] py-4 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all font-bold shadow-lg shadow-indigo-200 flex items-center justify-center gap-2"
+              >
+                <CalendarRange className="w-5 h-5" />
+                {isEditing ? "Cập nhật kế hoạch" : "Tính toán & Lập kế hoạch"}
+              </button>
+            </div>
+          </form>
+        </Card>
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex">
+      {/* Sidebar */}
+      <aside className="w-64 bg-white border-r border-slate-200 flex flex-col hidden lg:flex">
+        <div className="p-6">
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-200">
+              <Package className="text-white w-6 h-6" />
+            </div>
+            <div>
+              <h1 className="font-bold text-slate-900 leading-tight">WaterFlow</h1>
+              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Production Pro</p>
             </div>
           </div>
 
-          {/* RIGHT: HISTORY TABLE */}
-          <div className="lg:col-span-2 h-[calc(100vh-220px)] min-h-[500px]">
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 h-full flex flex-col">
-               <div className="p-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center rounded-t-lg">
-                  <h3 className="font-bold text-gray-700 text-base tracking-wide">Lịch sử Quét (Khu vực này)</h3>
-                  <div className="text-sm flex gap-4 font-medium">
-                    <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-green-500"></div> OK</span>
-                    <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-amber-500"></div> NG</span>
-                    <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-red-500"></div> Err</span>
-                  </div>
-               </div>
-               
-               <div className="flex-1 overflow-auto">
-                 <table className="w-full text-left text-base tracking-wide">
-                   <thead className="bg-gray-100 text-gray-600 sticky top-0 z-10 shadow-sm border-b border-gray-200">
-                     <tr>
-                       <th className="p-4 font-semibold w-16 text-center">STT</th>
-                       <th className="p-4 font-semibold">Công Đoạn</th>
-                       <th className="p-4 font-semibold">Mã IMEI máy</th>
-                       <th className="p-4 font-semibold text-blue-700">Tên Model</th>
-                       <th className="p-4 font-semibold">Chi tiết Sửa chữa / Lỗi</th>
-                       <th className="p-4 font-semibold">Nhân Viên</th>
-                       <th className="p-4 font-semibold">Trạng Thái</th>
-                     </tr>
-                   </thead>
-                   <tbody className="divide-y divide-gray-100">
-                     {history.length === 0 ? (
-                       <tr><td colSpan={7} className="p-10 text-center text-gray-400 italic text-lg">Chưa có dữ liệu</td></tr>
-                     ) : (
-                       history.map((row) => {
-                         const rowStageObj = stages.find(s => s.id === row.stage);
-                         const labels = rowStageObj?.statusLabels || { valid: "OK", defect: "NG", error: "ERR" };
-                         
-                         let rowClass = "";
-                         if (row.status === 'valid') rowClass = "border-l-4 border-l-green-500 hover:bg-gray-50";
-                         else if (row.status === 'defect') rowClass = "border-l-4 border-l-amber-500 bg-amber-50 hover:bg-amber-100";
-                         else rowClass = "border-l-4 border-l-red-500 bg-red-50 hover:bg-red-100";
-                         
-                         const renderExtended = () => {
-                           if (!row.additionalValues || row.additionalValues.every(v => !v)) return null;
-                           return (
-                             <div className="mt-1 flex flex-col gap-1">
-                               {row.additionalValues.map((v, i) => {
-                                 if (!v) return null;
-                                 const label = rowStageObj?.additionalFieldLabels?.[i];
-                                 return (
-                                   <span key={i} className="text-xs bg-purple-50 text-purple-800 px-2 py-0.5 rounded border border-purple-100 w-fit">
-                                     {label ? <span className="font-semibold text-purple-900">{label}:</span> : ''} {v}
-                                   </span>
-                                 )
-                               })}
-                             </div>
-                           )
-                         };
+          <nav className="space-y-1">
+            <button 
+              onClick={() => setActiveTab('dashboard')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'dashboard' ? 'bg-indigo-50 text-indigo-600 font-semibold' : 'text-slate-500 hover:bg-slate-50'}`}
+            >
+              <LayoutDashboard className="w-5 h-5" />
+              Dashboard
+            </button>
+            <button 
+              onClick={() => setActiveTab('planning')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'planning' ? 'bg-indigo-50 text-indigo-600 font-semibold' : 'text-slate-500 hover:bg-slate-50'}`}
+            >
+              <CalendarRange className="w-5 h-5" />
+              Lập kế hoạch
+            </button>
+            <button 
+              onClick={() => setActiveTab('masterdata')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'masterdata' ? 'bg-indigo-50 text-indigo-600 font-semibold' : 'text-slate-500 hover:bg-slate-50'}`}
+            >
+              <Database className="w-5 h-5" />
+              Dữ liệu gốc
+            </button>
+          </nav>
+        </div>
 
-                         return (
-                           <tr key={row.id} className={rowClass}>
-                             <td className="p-4 text-gray-500 text-center">{row.stt}</td>
-                             <td className="p-4">
-                                <span className={`text-xs font-bold px-2 py-1 rounded border ${row.stage === currentStage ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-gray-100 text-gray-600 border-gray-200'}`}>
-                                    {rowStageObj?.name || `Stage ${row.stage}`}
-                                </span>
-                             </td>
-                             <td className={`p-4 font-mono font-medium ${row.status === 'error' ? 'text-red-700 line-through' : row.status === 'defect' ? 'text-amber-800' : 'text-blue-700'}`}>
-                               {row.productCode}
-                             </td>
-                             <td className="p-4 font-bold text-gray-700">
-                               {row.modelName || <span className="text-gray-300">-</span>}
-                             </td>
-                             <td className="p-4 align-top">
-                                {row.measurement && <div className="font-bold text-purple-700 mb-1">{rowStageObj?.measurementLabel}: {row.measurement}</div>}
-                                {renderExtended()}
-                             </td>
-                             <td className="p-4 text-gray-900">{row.employeeId}</td>
-                             <td className="p-4">
-                               {row.status === 'valid' ? (
-                                 <div className="text-sm text-gray-500 flex items-center gap-1.5">
-                                   <CheckCircle size={16} className="text-green-500"/>
-                                   <span className="font-bold text-green-700">{labels.valid}</span>
-                                   <span className="opacity-50">|</span>
-                                   {format(new Date(row.timestamp), 'HH:mm:ss')}
-                                 </div>
-                               ) : row.status === 'defect' ? (
-                                  <span className="text-amber-700 font-bold text-sm flex items-center gap-1.5">
-                                   <XCircle size={16}/> {labels.defect}: {row.note}
-                                 </span>
-                               ) : (
-                                 <span className="text-red-600 font-bold text-sm flex items-center gap-1.5">
-                                   <AlertTriangle size={16}/> {labels.error}: {row.note}
-                                 </span>
-                               )}
-                             </td>
-                           </tr>
-                         );
-                       })
-                     )}
-                   </tbody>
-                 </table>
-               </div>
+        <div className="mt-auto p-6 border-t border-slate-100">
+          <div className="bg-slate-900 rounded-2xl p-4 text-white">
+            <p className="text-xs font-medium text-slate-400">Hệ thống đang chạy</p>
+            <div className="flex items-center gap-2 mt-2">
+              <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+              <span className="text-sm font-semibold">Máy chủ ổn định</span>
             </div>
           </div>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex-1 overflow-y-auto">
+        <header className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-10 px-8 py-4 flex items-center justify-between">
+          <h2 className="text-xl font-bold text-slate-900">
+            {activeTab === 'dashboard' && 'Tổng quan sản xuất'}
+            {activeTab === 'planning' && 'Lập kế hoạch tự động'}
+            {activeTab === 'masterdata' && 'Quản lý danh mục'}
+          </h2>
+          <div className="flex items-center gap-4">
+            <div className="text-right hidden sm:block">
+              <p className="text-sm font-bold text-slate-900">Admin Factory</p>
+              <p className="text-xs text-slate-400">Quản lý sản xuất</p>
+            </div>
+            <div className="w-10 h-10 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center">
+              <Settings className="w-5 h-5 text-slate-500" />
+            </div>
+          </div>
+        </header>
+
+        <div className="p-8 max-w-7xl mx-auto">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeTab}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.2 }}
+            >
+              {activeTab === 'dashboard' && renderDashboard()}
+              {activeTab === 'masterdata' && renderMasterData()}
+              {activeTab === 'planning' && renderPlanning()}
+            </motion.div>
+          </AnimatePresence>
+        </div>
       </main>
-
-      <ErrorModal isOpen={errorModal.isOpen} message={errorModal.message} onClose={handleCloseError} />
-
-      <StageSettingsModal 
-        isOpen={isSettingsOpen}
-        stages={stages}
-        availableModels={availableModels}
-        onSave={(newStages, newModels) => {
-            setStages(newStages);
-            setAvailableModels(newModels);
-        }}
-        onClose={() => setIsSettingsOpen(false)}
-      />
     </div>
   );
 }
