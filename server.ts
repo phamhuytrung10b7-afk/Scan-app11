@@ -7,7 +7,9 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const db = new Database("production.db");
+const dbPath = path.resolve(__dirname, "production.db");
+const db = new Database(dbPath);
+console.log(`Database initialized at: ${dbPath}`);
 
 // Initialize Database Schema
 db.exec(`
@@ -66,6 +68,7 @@ db.exec(`
     FOREIGN KEY (model_id) REFERENCES models(id)
   );
 `);
+console.log("Database schema initialized");
 
 // Seed initial capacity if not exists
 const capacityCount = db.prepare("SELECT COUNT(*) as count FROM capacity").get() as { count: number };
@@ -95,8 +98,13 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(express.json());
+  console.log("JSON middleware registered");
 
   // API Routes
+  app.get("/api/health", (req, res) => {
+    console.log("Health check requested");
+    res.json({ status: "ok" });
+  });
   
   // Models
   app.get("/api/models", (req, res) => {
@@ -106,29 +114,35 @@ async function startServer() {
 
   app.post("/api/models", (req, res) => {
     const { code, name } = req.body;
+    console.log("POST /api/models", { code, name });
     try {
       const result = db.prepare("INSERT INTO models (code, name) VALUES (?, ?)").run(code, name);
       res.json({ id: result.lastInsertRowid });
     } catch (e: any) {
+      console.error("Error in POST /api/models", e);
       res.status(400).json({ error: e.message });
     }
   });
 
   app.put("/api/models/:id", (req, res) => {
     const { code, name } = req.body;
+    console.log(`PUT /api/models/${req.params.id}`, { code, name });
     try {
       db.prepare("UPDATE models SET code = ?, name = ? WHERE id = ?").run(code, name, req.params.id);
       res.json({ success: true });
     } catch (e: any) {
+      console.error("Error in PUT /api/models", e);
       res.status(400).json({ error: e.message });
     }
   });
 
   app.delete("/api/models/:id", (req, res) => {
+    console.log(`DELETE /api/models/${req.params.id}`);
     try {
       db.prepare("DELETE FROM models WHERE id = ?").run(req.params.id);
       res.json({ success: true });
     } catch (e: any) {
+      console.error("Error in DELETE /api/models", e);
       res.status(400).json({ error: e.message });
     }
   });
@@ -141,29 +155,35 @@ async function startServer() {
 
   app.post("/api/components", (req, res) => {
     const { code, name, standard_time_minutes, setup_time_minutes, buffer_time_minutes } = req.body;
+    console.log("POST /api/components", { code, name });
     try {
       const result = db.prepare("INSERT INTO components (code, name, standard_time_minutes, setup_time_minutes, buffer_time_minutes) VALUES (?, ?, ?, ?, ?)").run(code, name, standard_time_minutes, setup_time_minutes || 0, buffer_time_minutes || 0);
       res.json({ id: result.lastInsertRowid });
     } catch (e: any) {
+      console.error("Error in POST /api/components", e);
       res.status(400).json({ error: e.message });
     }
   });
 
   app.put("/api/components/:id", (req, res) => {
     const { code, name, standard_time_minutes, setup_time_minutes, buffer_time_minutes } = req.body;
+    console.log(`PUT /api/components/${req.params.id}`, { code, name });
     try {
       db.prepare("UPDATE components SET code = ?, name = ?, standard_time_minutes = ?, setup_time_minutes = ?, buffer_time_minutes = ? WHERE id = ?").run(code, name, standard_time_minutes, setup_time_minutes || 0, buffer_time_minutes || 0, req.params.id);
       res.json({ success: true });
     } catch (e: any) {
+      console.error("Error in PUT /api/components", e);
       res.status(400).json({ error: e.message });
     }
   });
 
   app.delete("/api/components/:id", (req, res) => {
+    console.log(`DELETE /api/components/${req.params.id}`);
     try {
       db.prepare("DELETE FROM components WHERE id = ?").run(req.params.id);
       res.json({ success: true });
     } catch (e: any) {
+      console.error("Error in DELETE /api/components", e);
       res.status(400).json({ error: e.message });
     }
   });
@@ -425,6 +445,8 @@ async function startServer() {
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Current directory: ${process.cwd()}`);
+    console.log(`Database path: ${path.resolve("production.db")}`);
   });
 }
 
