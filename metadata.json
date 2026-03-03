@@ -1,5 +1,5 @@
 {
-  "name": "Hệ Thống Quét Mã Pro app con",
-  "description": "Ứng dụng quét mã vạch/QR mạnh mẽ, độ tương phản cao dành cho môi trường nhà máy và kho bãi. Tính năng chống trùng lặp thời gian thực và xuất Excel.",
+  "name": "Water Purifier Production Planner",
+  "description": "Automated production planning system for water purifier manufacturing, featuring BOM management, capacity calculation, and feasibility checks.",
   "requestFramePermissions": []
 }
