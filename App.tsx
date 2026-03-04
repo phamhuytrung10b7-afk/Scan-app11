@@ -245,6 +245,57 @@ export default function App() {
     return current;
   };
 
+  const subtractProductionTime = (endDate: Date, durationSeconds: number, cap: Capacity): Date => {
+    let remainingSeconds = durationSeconds / (cap.workers || 1);
+    let current = new Date(endDate);
+
+    const [sH, sM] = cap.shift_start.split(':').map(Number);
+    const [eH, eM] = cap.shift_end.split(':').map(Number);
+    const [bSH, bSM] = cap.break_start.split(':').map(Number);
+    const [bEH, bEM] = cap.break_end.split(':').map(Number);
+
+    while (remainingSeconds > 0) {
+      // Skip Sundays
+      if (current.getDay() === 0) {
+        current.setDate(current.getDate() - 1);
+        current.setHours(eH, eM, 0, 0);
+        continue;
+      }
+
+      const shiftStart = new Date(current);
+      shiftStart.setHours(sH, sM, 0, 0);
+      const shiftEnd = new Date(current);
+      shiftEnd.setHours(eH, eM, 0, 0);
+      const breakStart = new Date(current);
+      breakStart.setHours(bSH, bSM, 0, 0);
+      const breakEnd = new Date(current);
+      breakEnd.setHours(bEH, bEM, 0, 0);
+
+      if (current > breakEnd && current <= shiftEnd) {
+        // In shift after break
+      } else if (current > breakStart && current <= breakEnd) {
+        current = breakStart;
+        continue;
+      } else if (current > shiftStart && current <= breakStart) {
+        // In shift before break
+      } else {
+        // Outside shift
+        current.setDate(current.getDate() - 1);
+        current.setHours(eH, eM, 0, 0);
+        continue;
+      }
+
+      let prevBoundary = shiftStart;
+      if (current > breakEnd) prevBoundary = breakEnd;
+
+      const availableSeconds = (current.getTime() - prevBoundary.getTime()) / 1000;
+      const toSubtract = Math.min(remainingSeconds, availableSeconds);
+      current = new Date(current.getTime() - toSubtract * 1000);
+      remainingSeconds -= toSubtract;
+    }
+    return current;
+  };
+
   const fetchData = () => {
     setLoading(true);
     try {
@@ -320,20 +371,28 @@ export default function App() {
     if (!plan) return;
 
     const modelBoms = boms.filter(b => b.model_id === plan.model_id);
-    let currentStartTime = new Date(plan.start_time);
-    if (isNaN(currentStartTime.getTime())) {
-      console.error("Invalid start time for plan:", plan);
+    
+    // 1. Sort BOM items by leadtime descending
+    const sortedBoms = modelBoms.map(bom => {
+      const comp = components.find(c => c.id === bom.component_id);
+      const leadtime = comp ? (comp.standard_time_seconds * bom.quantity * plan.quantity) : 0;
+      return { bom, leadtime };
+    }).sort((a, b) => b.leadtime - a.leadtime);
+
+    // 2. Backward scheduling
+    let currentEndTime = new Date(plan.deadline);
+    if (isNaN(currentEndTime.getTime())) {
+      console.error("Invalid deadline for plan:", plan);
       return;
     }
     
-    const roadmap: RoadmapItem[] = modelBoms.map((bom, index) => {
-      const comp = components.find(c => c.id === bom.component_id);
-      const leadtime = comp ? (comp.standard_time_seconds * bom.quantity * plan.quantity) : 0;
+    const roadmap: RoadmapItem[] = sortedBoms.map((item, index) => {
+      const { bom, leadtime } = item;
       
-      const start = new Date(currentStartTime);
-      const end = addProductionTime(start, leadtime, capacity);
+      const end = new Date(currentEndTime);
+      const start = subtractProductionTime(end, leadtime, capacity);
       
-      currentStartTime = new Date(end);
+      currentEndTime = new Date(start);
 
       return {
         id: index + 1,
@@ -367,14 +426,19 @@ export default function App() {
       }
     });
 
-    const startTime = new Date(planData.start_time);
-    if (isNaN(startTime.getTime())) {
-      alert("Thời gian bắt đầu không hợp lệ");
+    const deadlineTime = new Date(planData.deadline);
+    if (isNaN(deadlineTime.getTime())) {
+      alert("Hạn chót không hợp lệ");
       return;
     }
+    
+    // Backward scheduling: calculate start time from deadline
+    const startTime = subtractProductionTime(deadlineTime, totalSeconds, capacity);
+    
+    // For completion time, we can use the original forward calculation or just use deadline if we assume it finishes exactly at deadline.
+    // Let's keep the forward calculation to check if it meets the deadline.
     const completionTime = addProductionTime(startTime, totalSeconds, capacity);
     
-    const deadlineTime = new Date(planData.deadline);
     const gapMs = completionTime.getTime() - deadlineTime.getTime();
     const gapHours = Math.max(0, gapMs / (1000 * 60 * 60));
 
@@ -384,7 +448,7 @@ export default function App() {
       model_name: model?.name || 'Unknown',
       model_code: model?.code || 'Unknown',
       quantity: planData.quantity,
-      start_time: planData.start_time,
+      start_time: startTime.toISOString(),
       deadline: planData.deadline,
       estimated_completion_time: completionTime.toISOString(),
       gap_hours: gapHours,
@@ -696,7 +760,7 @@ export default function App() {
 
                         <div className="mt-4 pt-4 border-t border-slate-100 flex justify-between items-center">
                           <p className="text-xs text-slate-500">
-                            Leadtime: <span className="font-bold text-slate-700">{Math.round(item.leadtime_minutes)} phút</span>
+                            Leadtime: <span className="font-bold text-slate-700">{Math.round(item.leadtime_seconds)} giây</span>
                           </p>
                           <div className="h-1.5 w-24 bg-slate-100 rounded-full overflow-hidden">
                             <div 
