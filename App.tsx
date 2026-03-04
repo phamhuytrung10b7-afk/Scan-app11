@@ -384,20 +384,20 @@ export default function App() {
       return { bom, leadtime };
     }).sort((a, b) => b.leadtime - a.leadtime);
 
-    // 2. Backward scheduling
-    let currentEndTime = new Date(plan.deadline);
-    if (isNaN(currentEndTime.getTime())) {
-      console.error("Invalid deadline for plan:", plan);
+    // 2. Forward scheduling
+    let currentStartTime = new Date(plan.start_time);
+    if (isNaN(currentStartTime.getTime())) {
+      console.error("Invalid start time for plan:", plan);
       return;
     }
     
     const roadmap: RoadmapItem[] = sortedBoms.map((item, index) => {
       const { bom, leadtime } = item;
       
-      const end = new Date(currentEndTime);
-      const start = subtractProductionTime(end, leadtime, capacity);
+      const start = new Date(currentStartTime);
+      const end = addProductionTime(start, leadtime, capacity);
       
-      currentEndTime = new Date(start);
+      currentStartTime = new Date(end);
 
       return {
         id: index + 1,
@@ -431,18 +431,19 @@ export default function App() {
       }
     });
 
+    const startTime = new Date(planData.start_time);
+    if (isNaN(startTime.getTime())) {
+      alert("Thời gian bắt đầu không hợp lệ");
+      return;
+    }
+    
+    const completionTime = addProductionTime(startTime, totalSeconds, capacity);
+    
     const deadlineTime = new Date(planData.deadline);
     if (isNaN(deadlineTime.getTime())) {
       alert("Hạn chót không hợp lệ");
       return;
     }
-    
-    // Backward scheduling: calculate start time from deadline
-    const startTime = subtractProductionTime(deadlineTime, totalSeconds, capacity);
-    
-    // For completion time, we can use the original forward calculation or just use deadline if we assume it finishes exactly at deadline.
-    // Let's keep the forward calculation to check if it meets the deadline.
-    const completionTime = addProductionTime(startTime, totalSeconds, capacity);
     
     const gapMs = completionTime.getTime() - deadlineTime.getTime();
     const gapHours = Math.max(0, gapMs / (1000 * 60 * 60));
@@ -453,7 +454,7 @@ export default function App() {
       model_name: model?.name || 'Unknown',
       model_code: model?.code || 'Unknown',
       quantity: planData.quantity,
-      start_time: startTime.toISOString(),
+      start_time: planData.start_time,
       deadline: planData.deadline,
       estimated_completion_time: completionTime.toISOString(),
       gap_hours: gapHours,
