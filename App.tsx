@@ -42,8 +42,6 @@ interface Component {
   code: string;
   name: string;
   standard_time_minutes: number;
-  setup_time_minutes: number;
-  buffer_time_minutes: number;
 }
 
 interface RoadmapItem {
@@ -53,8 +51,8 @@ interface RoadmapItem {
   component_name: string;
   component_code: string;
   quantity: number;
-  start_date: string;
-  end_date: string;
+  start_time: string;
+  end_time: string;
   leadtime_minutes: number;
   is_bottleneck: boolean;
 }
@@ -71,7 +69,10 @@ interface BOMItem {
 
 interface Capacity {
   workers: number;
-  hours_per_day: number;
+  shift_start: string;
+  shift_end: string;
+  break_start: string;
+  break_end: string;
 }
 
 interface Plan {
@@ -80,9 +81,9 @@ interface Plan {
   model_name: string;
   model_code: string;
   quantity: number;
-  start_date: string;
+  start_time: string;
   deadline: string;
-  estimated_completion_date: string;
+  estimated_completion_time: string;
   gap_hours: number;
   status: string;
 }
@@ -132,14 +133,20 @@ export default function App() {
   const [models, setModels] = useState<Model[]>([]);
   const [components, setComponents] = useState<Component[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
-  const [capacity, setCapacity] = useState<Capacity>({ workers: 5, hours_per_day: 8 });
+  const [capacity, setCapacity] = useState<Capacity>({ 
+    workers: 5, 
+    shift_start: '08:00', 
+    shift_end: '17:00',
+    break_start: '12:00',
+    break_end: '13:00'
+  });
   const [boms, setBoms] = useState<BOMItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Form States
   const [newModel, setNewModel] = useState({ code: '', name: '' });
-  const [newComponent, setNewComponent] = useState({ code: '', name: '', standard_time_minutes: 0, setup_time_minutes: 0, buffer_time_minutes: 0 });
-  const [newPlan, setNewPlan] = useState({ model_id: 0, quantity: 0, start_date: '', deadline: '' });
+  const [newComponent, setNewComponent] = useState({ code: '', name: '', standard_time_minutes: 0 });
+  const [newPlan, setNewPlan] = useState({ model_id: 0, quantity: 0, start_time: '', deadline: '' });
   const [newBOM, setNewBOM] = useState({ model_id: 0, component_id: 0, quantity: 1 });
 
   // Roadmap State
@@ -176,13 +183,81 @@ export default function App() {
     }
   };
 
+  const formatDateTime = (isoString: string) => {
+    if (!isoString) return '-';
+    const date = new Date(isoString);
+    return date.toLocaleString('vi-VN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const addProductionTime = (startDate: Date, durationMinutes: number, cap: Capacity): Date => {
+    let remainingMinutes = durationMinutes / (cap.workers || 1);
+    let current = new Date(startDate);
+
+    const [sH, sM] = cap.shift_start.split(':').map(Number);
+    const [eH, eM] = cap.shift_end.split(':').map(Number);
+    const [bSH, bSM] = cap.break_start.split(':').map(Number);
+    const [bEH, bEM] = cap.break_end.split(':').map(Number);
+
+    while (remainingMinutes > 0) {
+      // Skip Sundays
+      if (current.getDay() === 0) {
+        current.setDate(current.getDate() + 1);
+        current.setHours(sH, sM, 0, 0);
+        continue;
+      }
+
+      const shiftStart = new Date(current);
+      shiftStart.setHours(sH, sM, 0, 0);
+      const shiftEnd = new Date(current);
+      shiftEnd.setHours(eH, eM, 0, 0);
+      const breakStart = new Date(current);
+      breakStart.setHours(bSH, bSM, 0, 0);
+      const breakEnd = new Date(current);
+      breakEnd.setHours(bEH, bEM, 0, 0);
+
+      if (current < shiftStart) current = shiftStart;
+      
+      if (current >= shiftEnd) {
+        current.setDate(current.getDate() + 1);
+        current.setHours(sH, sM, 0, 0);
+        continue;
+      }
+
+      if (current >= breakStart && current < breakEnd) {
+        current = breakEnd;
+        continue;
+      }
+
+      let nextBoundary = shiftEnd;
+      if (current < breakStart) nextBoundary = breakStart;
+
+      const availableMinutes = (nextBoundary.getTime() - current.getTime()) / (1000 * 60);
+      const toAdd = Math.min(remainingMinutes, availableMinutes);
+      current = new Date(current.getTime() + toAdd * 60 * 1000);
+      remainingMinutes -= toAdd;
+    }
+    return current;
+  };
+
   const fetchData = () => {
     setLoading(true);
     try {
       let modelsData = storage.get('models', []);
       let componentsData = storage.get('components', []);
       let plansData = storage.get('plans', []);
-      let capacityData = storage.get('capacity', { workers: 5, hours_per_day: 8 });
+      let capacityData = storage.get('capacity', { 
+        workers: 5, 
+        shift_start: '08:00', 
+        shift_end: '17:00',
+        break_start: '12:00',
+        break_end: '13:00'
+      });
       let bomsData = storage.get('boms', []);
 
       // Add sample data if empty
@@ -192,8 +267,8 @@ export default function App() {
           { id: 2, code: 'M002', name: 'Sản phẩm B' }
         ];
         componentsData = [
-          { id: 1, code: 'C001', name: 'Khay 1', standard_time_minutes: 10, setup_time_minutes: 5, buffer_time_minutes: 2 },
-          { id: 2, code: 'C002', name: 'Khay 2', standard_time_minutes: 15, setup_time_minutes: 10, buffer_time_minutes: 5 }
+          { id: 1, code: 'C001', name: 'Khay 1', standard_time_minutes: 10 },
+          { id: 2, code: 'C002', name: 'Khay 2', standard_time_minutes: 15 }
         ];
         bomsData = [
           { id: 1, model_id: 1, component_id: 1, quantity: 2, component_name: 'Khay 1', component_code: 'C001', standard_time_minutes: 10 },
@@ -245,18 +320,16 @@ export default function App() {
     if (!plan) return;
 
     const modelBoms = boms.filter(b => b.model_id === plan.model_id);
-    let currentDate = new Date(plan.start_date);
+    let currentStartTime = new Date(plan.start_time);
     
     const roadmap: RoadmapItem[] = modelBoms.map((bom, index) => {
       const comp = components.find(c => c.id === bom.component_id);
-      const leadtime = comp ? (comp.standard_time_minutes * bom.quantity * plan.quantity) + comp.setup_time_minutes + comp.buffer_time_minutes : 0;
+      const leadtime = comp ? (comp.standard_time_minutes * bom.quantity * plan.quantity) : 0;
       
-      const start = new Date(currentDate);
-      const end = new Date(start);
-      const days = Math.ceil(leadtime / (capacity.workers * capacity.hours_per_day * 60));
-      end.setDate(end.getDate() + (days || 1));
+      const start = new Date(currentStartTime);
+      const end = addProductionTime(start, leadtime, capacity);
       
-      currentDate = new Date(end);
+      currentStartTime = new Date(end);
 
       return {
         id: index + 1,
@@ -265,8 +338,8 @@ export default function App() {
         component_name: bom.component_name,
         component_code: bom.component_code,
         quantity: bom.quantity * plan.quantity,
-        start_date: start.toISOString().split('T')[0],
-        end_date: end.toISOString().split('T')[0],
+        start_time: start.toISOString(),
+        end_time: end.toISOString(),
         leadtime_minutes: leadtime,
         is_bottleneck: leadtime > 480
       };
@@ -286,19 +359,15 @@ export default function App() {
     modelBoms.forEach(bom => {
       const comp = components.find(c => c.id === bom.component_id);
       if (comp) {
-        totalMinutes += (comp.standard_time_minutes * bom.quantity * planData.quantity) + comp.setup_time_minutes + comp.buffer_time_minutes;
+        totalMinutes += (comp.standard_time_minutes * bom.quantity * planData.quantity);
       }
     });
 
-    const capacityMinutesPerDay = (capacity.workers || 1) * (capacity.hours_per_day || 1) * 60;
-    const daysNeeded = Math.ceil(totalMinutes / capacityMinutesPerDay);
+    const startTime = new Date(planData.start_time);
+    const completionTime = addProductionTime(startTime, totalMinutes, capacity);
     
-    const startDate = new Date(planData.start_date);
-    const completionDate = new Date(startDate);
-    completionDate.setDate(completionDate.getDate() + (daysNeeded || 1));
-    
-    const deadlineDate = new Date(planData.deadline);
-    const gapMs = completionDate.getTime() - deadlineDate.getTime();
+    const deadlineTime = new Date(planData.deadline);
+    const gapMs = completionTime.getTime() - deadlineTime.getTime();
     const gapHours = Math.max(0, gapMs / (1000 * 60 * 60));
 
     const planToAdd: Plan = {
@@ -307,9 +376,9 @@ export default function App() {
       model_name: model?.name || 'Unknown',
       model_code: model?.code || 'Unknown',
       quantity: planData.quantity,
-      start_date: planData.start_date,
+      start_time: planData.start_time,
       deadline: planData.deadline,
-      estimated_completion_date: completionDate.toISOString().split('T')[0],
+      estimated_completion_time: completionTime.toISOString(),
       gap_hours: gapHours,
       status: gapHours > 0 ? 'Delayed' : 'On Track'
     };
@@ -323,7 +392,7 @@ export default function App() {
 
     setPlans(updatedPlans);
     storage.set('plans', updatedPlans);
-    setNewPlan({ model_id: 0, quantity: 0, start_date: '', deadline: '' });
+    setNewPlan({ model_id: 0, quantity: 0, start_time: '', deadline: '' });
     setEditingPlan(null);
     setActiveTab('dashboard');
   };
@@ -421,22 +490,20 @@ export default function App() {
       modelBoms.forEach(bom => {
         const comp = components.find(c => c.id === bom.component_id);
         if (comp) {
-          totalMinutes += (comp.standard_time_minutes * bom.quantity * plan.quantity) + comp.setup_time_minutes + comp.buffer_time_minutes;
+          totalMinutes += (comp.standard_time_minutes * bom.quantity * plan.quantity);
         }
       });
 
-      const capacityMinutesPerDay = (capacity.workers || 1) * (capacity.hours_per_day || 1) * 60;
-      const daysNeeded = Math.ceil(totalMinutes / capacityMinutesPerDay);
-      const startDate = new Date(plan.start_date);
-      const completionDate = new Date(startDate);
-      completionDate.setDate(completionDate.getDate() + (daysNeeded || 1));
-      const deadlineDate = new Date(plan.deadline);
-      const gapMs = completionDate.getTime() - deadlineDate.getTime();
+      const startTime = new Date(plan.start_time);
+      const completionTime = addProductionTime(startTime, totalMinutes, capacity);
+      
+      const deadlineTime = new Date(plan.deadline);
+      const gapMs = completionTime.getTime() - deadlineTime.getTime();
       const gapHours = Math.max(0, gapMs / (1000 * 60 * 60));
 
       return {
         ...plan,
-        estimated_completion_date: completionDate.toISOString().split('T')[0],
+        estimated_completion_time: completionTime.toISOString(),
         gap_hours: gapHours,
         status: gapHours > 0 ? 'Delayed' : 'On Track'
       };
@@ -462,7 +529,7 @@ export default function App() {
           <StatCard label="Tổng kế hoạch" value={totalPlans} icon={CalendarRange} color="indigo" />
           <StatCard label="Đúng tiến độ" value={onTimePlans} icon={CheckCircle2} color="emerald" />
           <StatCard label="Cảnh báo trễ" value={delayedPlans} icon={AlertCircle} color="rose" />
-          <StatCard label="Năng lực (Giờ/Ngày)" value={capacity.workers * capacity.hours_per_day} subValue={`${capacity.workers} nhân công`} icon={Clock} color="amber" />
+          <StatCard label="Lịch làm việc" value={capacity.shift_start + ' - ' + capacity.shift_end} subValue={`${capacity.workers} nhân công`} icon={Clock} color="amber" />
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -493,7 +560,7 @@ export default function App() {
                 <div key={plan.id} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100">
                   <div>
                     <p className="text-sm font-semibold text-slate-800">{plan.model_name}</p>
-                    <p className="text-xs text-slate-500">{plan.quantity} PCS • {plan.deadline}</p>
+                    <p className="text-xs text-slate-500">{plan.quantity} PCS • {formatDateTime(plan.deadline)}</p>
                   </div>
                   {plan.gap_hours > 0 ? (
                     <span className="px-2 py-1 rounded-full bg-rose-100 text-rose-600 text-[10px] font-bold uppercase">Trễ {Math.round(plan.gap_hours)}h</span>
@@ -528,9 +595,9 @@ export default function App() {
                       <div className="text-xs text-slate-400">{plan.model_code}</div>
                     </td>
                     <td className="py-4 text-sm text-slate-600 font-mono">{plan.quantity}</td>
-                    <td className="py-4 text-sm text-slate-600">{plan.start_date}</td>
-                    <td className="py-4 text-sm text-slate-600">{plan.deadline}</td>
-                    <td className="py-4 text-sm text-slate-600">{plan.estimated_completion_date}</td>
+                    <td className="py-4 text-sm text-slate-600">{formatDateTime(plan.start_time)}</td>
+                    <td className="py-4 text-sm text-slate-600">{formatDateTime(plan.deadline)}</td>
+                    <td className="py-4 text-sm text-slate-600">{formatDateTime(plan.estimated_completion_time)}</td>
                     <td className="py-4">
                       {plan.gap_hours > 0 ? (
                         <div className="flex items-center gap-1.5 text-rose-600 font-medium text-sm">
@@ -608,11 +675,11 @@ export default function App() {
                         <div className="grid grid-cols-2 gap-4 text-sm">
                           <div>
                             <p className="text-[10px] text-slate-400 uppercase font-bold">Bắt đầu muộn nhất</p>
-                            <p className="font-semibold text-slate-700">{item.start_date}</p>
+                            <p className="font-semibold text-slate-700">{formatDateTime(item.start_time)}</p>
                           </div>
                           <div>
                             <p className="text-[10px] text-slate-400 uppercase font-bold">Hoàn thành</p>
-                            <p className="font-semibold text-slate-700">{item.end_date}</p>
+                            <p className="font-semibold text-slate-700">{formatDateTime(item.end_time)}</p>
                           </div>
                         </div>
 
@@ -747,24 +814,10 @@ export default function App() {
                 <input 
                   type="number" 
                   placeholder="Chuẩn (phút)" 
-                  className="px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                  className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
                   value={newComponent.standard_time_minutes === 0 ? '0' : (newComponent.standard_time_minutes || '')}
                   onChange={e => setNewComponent({...newComponent, standard_time_minutes: e.target.value === '' ? 0 : parseFloat(e.target.value)})}
                   required
-                />
-                <input 
-                  type="number" 
-                  placeholder="Setup (phút)" 
-                  className="px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
-                  value={newComponent.setup_time_minutes === 0 ? '0' : (newComponent.setup_time_minutes || '')}
-                  onChange={e => setNewComponent({...newComponent, setup_time_minutes: e.target.value === '' ? 0 : parseFloat(e.target.value)})}
-                />
-                <input 
-                  type="number" 
-                  placeholder="Buffer (phút)" 
-                  className="px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
-                  value={newComponent.buffer_time_minutes === 0 ? '0' : (newComponent.buffer_time_minutes || '')}
-                  onChange={e => setNewComponent({...newComponent, buffer_time_minutes: e.target.value === '' ? 0 : parseFloat(e.target.value)})}
                 />
               </div>
               <button type="submit" className="w-full py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2 text-sm font-medium">
@@ -790,24 +843,12 @@ export default function App() {
                           onChange={e => setEditingComponent({...editingComponent, name: e.target.value})}
                         />
                       </div>
-                      <div className="grid grid-cols-3 gap-2 items-center">
+                      <div className="grid grid-cols-1 gap-2 items-center">
                         <input 
                           type="number" 
-                          className="px-2 py-1 rounded border text-sm"
+                          className="w-full px-2 py-1 rounded border text-sm"
                           value={editingComponent.standard_time_minutes === 0 ? '0' : (editingComponent.standard_time_minutes || '')}
                           onChange={e => setEditingComponent({...editingComponent, standard_time_minutes: e.target.value === '' ? 0 : parseFloat(e.target.value)})}
-                        />
-                        <input 
-                          type="number" 
-                          className="px-2 py-1 rounded border text-sm"
-                          value={editingComponent.setup_time_minutes === 0 ? '0' : (editingComponent.setup_time_minutes || '')}
-                          onChange={e => setEditingComponent({...editingComponent, setup_time_minutes: e.target.value === '' ? 0 : parseFloat(e.target.value)})}
-                        />
-                        <input 
-                          type="number" 
-                          className="px-2 py-1 rounded border text-sm"
-                          value={editingComponent.buffer_time_minutes === 0 ? '0' : (editingComponent.buffer_time_minutes || '')}
-                          onChange={e => setEditingComponent({...editingComponent, buffer_time_minutes: e.target.value === '' ? 0 : parseFloat(e.target.value)})}
                         />
                       </div>
                       <div className="flex justify-end gap-2">
@@ -819,7 +860,7 @@ export default function App() {
                     <>
                       <div>
                         <p className="text-sm font-semibold text-slate-800">{c.name}</p>
-                        <p className="text-[10px] text-slate-400">{c.code} • Chuẩn: {c.standard_time_minutes}m • Setup: {c.setup_time_minutes}m • Buffer: {c.buffer_time_minutes}m</p>
+                        <p className="text-[10px] text-slate-400">{c.code} • Chuẩn: {c.standard_time_minutes}m</p>
                       </div>
                       <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button onClick={() => setEditingComponent(c)} className="p-1 text-slate-400 hover:text-indigo-600"><Edit2 className="w-3.5 h-3.5" /></button>
@@ -910,7 +951,7 @@ export default function App() {
 
           <Card title="Năng lực sản xuất" icon={Clock}>
             <form onSubmit={updateCapacity} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4">
                 <div>
                   <label className="block text-xs font-medium text-slate-500 mb-1">Số nhân công/máy</label>
                   <input 
@@ -920,15 +961,45 @@ export default function App() {
                     onChange={e => setCapacity({...capacity, workers: e.target.value === '' ? 0 : parseInt(e.target.value)})}
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Giờ làm việc/ngày</label>
-                  <input 
-                    type="number" 
-                    step="0.5"
-                    className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
-                    value={capacity.hours_per_day === 0 ? '0' : (capacity.hours_per_day || '')}
-                    onChange={e => setCapacity({...capacity, hours_per_day: e.target.value === '' ? 0 : parseFloat(e.target.value)})}
-                  />
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-medium text-slate-500 mb-1 uppercase">Bắt đầu ca</label>
+                    <input 
+                      type="time" 
+                      className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                      value={capacity.shift_start}
+                      onChange={e => setCapacity({...capacity, shift_start: e.target.value})}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-medium text-slate-500 mb-1 uppercase">Kết thúc ca</label>
+                    <input 
+                      type="time" 
+                      className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                      value={capacity.shift_end}
+                      onChange={e => setCapacity({...capacity, shift_end: e.target.value})}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-medium text-slate-500 mb-1 uppercase">Nghỉ từ</label>
+                    <input 
+                      type="time" 
+                      className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                      value={capacity.break_start}
+                      onChange={e => setCapacity({...capacity, break_start: e.target.value})}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-medium text-slate-500 mb-1 uppercase">Nghỉ đến</label>
+                    <input 
+                      type="time" 
+                      className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                      value={capacity.break_end}
+                      onChange={e => setCapacity({...capacity, break_end: e.target.value})}
+                    />
+                  </div>
                 </div>
               </div>
               <button type="submit" className="w-full py-2 bg-slate-800 text-white rounded-xl hover:bg-slate-900 transition-colors text-sm font-medium">
@@ -984,14 +1055,14 @@ export default function App() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Ngày bắt đầu</label>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Thời điểm bắt đầu</label>
                   <input 
-                    type="date" 
+                    type="datetime-local" 
                     className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none"
-                    value={planData.start_date || ''}
+                    value={planData.start_time || ''}
                     onChange={e => {
                       const val = e.target.value;
-                      isEditing ? setEditingPlan({...editingPlan, start_date: val}) : setNewPlan({...newPlan, start_date: val});
+                      isEditing ? setEditingPlan({...editingPlan, start_time: val}) : setNewPlan({...newPlan, start_time: val});
                     }}
                     required
                   />
@@ -999,7 +1070,7 @@ export default function App() {
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Hạn chót (Deadline)</label>
                   <input 
-                    type="date" 
+                    type="datetime-local" 
                     className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none"
                     value={planData.deadline || ''}
                     onChange={e => {
@@ -1020,7 +1091,7 @@ export default function App() {
                 <div>
                   <h4 className="text-sm font-bold text-indigo-900">Giải thích Thuật toán</h4>
                   <div className="text-xs text-indigo-700 mt-2 space-y-2 leading-relaxed">
-                    <p><strong>1. Leadtime Linh kiện:</strong> (Số lượng × Thời gian chuẩn) + Setup time + Buffer time.</p>
+                    <p><strong>1. Leadtime Linh kiện:</strong> (Số lượng × Thời gian chuẩn).</p>
                     <p><strong>2. Lập lịch ngược (Backward):</strong> Dựa trên Deadline, hệ thống tính ngược lại ngày bắt đầu muộn nhất cho từng linh kiện (loại trừ Chủ Nhật).</p>
                     <p><strong>3. Phân bổ nguồn lực:</strong> Linh kiện có Leadtime dài nhất được ưu tiên sắp xếp trước.</p>
                     <p><strong>4. Cảnh báo điểm nghẽn:</strong> Nếu Leadtime linh kiện vượt quá quỹ thời gian 1 ca làm việc, hệ thống sẽ đánh dấu màu vàng.</p>
