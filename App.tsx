@@ -128,12 +128,12 @@ const StatCard = ({ label, value, subValue, icon: Icon, trend, color = "indigo" 
 // --- Main App ---
 
 export default function App() {
-  console.log("App component mounting...");
   const [activeTab, setActiveTab] = useState('dashboard');
   const [models, setModels] = useState<Model[]>([]);
   const [components, setComponents] = useState<Component[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
-  const [capacity, setCapacity] = useState<Capacity>({ workers: 0, hours_per_day: 0 });
+  const [capacity, setCapacity] = useState<Capacity>({ workers: 5, hours_per_day: 8 });
+  const [boms, setBoms] = useState<BOMItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Form States
@@ -156,199 +156,296 @@ export default function App() {
     fetchData();
   }, []);
 
-  const fetchData = async () => {
-    console.log("Fetching data...");
+  // --- Storage Helper ---
+  const storage = {
+    get: (key: string, defaultValue: any) => {
+      try {
+        const data = localStorage.getItem(`scan_app_${key}`);
+        return data ? JSON.parse(data) : defaultValue;
+      } catch (e) {
+        console.error(`Error reading ${key} from storage`, e);
+        return defaultValue;
+      }
+    },
+    set: (key: string, value: any) => {
+      try {
+        localStorage.setItem(`scan_app_${key}`, JSON.stringify(value));
+      } catch (e) {
+        console.error(`Error saving ${key} to storage`, e);
+      }
+    }
+  };
+
+  const fetchData = () => {
     setLoading(true);
     try {
-      const [modelsRes, componentsRes, plansRes, capacityRes] = await Promise.all([
-        fetch('/api/models'),
-        fetch('/api/components'),
-        fetch('/api/plans'),
-        fetch('/api/capacity')
-      ]);
-      
-      const modelsData = await modelsRes.json();
-      const componentsData = await componentsRes.json();
-      const plansData = await plansRes.json();
-      const capacityData = await capacityRes.json();
-      
-      console.log("Data fetched:", { modelsData, componentsData, plansData, capacityData });
-      
+      let modelsData = storage.get('models', []);
+      let componentsData = storage.get('components', []);
+      let plansData = storage.get('plans', []);
+      let capacityData = storage.get('capacity', { workers: 5, hours_per_day: 8 });
+      let bomsData = storage.get('boms', []);
+
+      // Add sample data if empty
+      if (modelsData.length === 0 && componentsData.length === 0) {
+        modelsData = [
+          { id: 1, code: 'M001', name: 'Sản phẩm A' },
+          { id: 2, code: 'M002', name: 'Sản phẩm B' }
+        ];
+        componentsData = [
+          { id: 1, code: 'C001', name: 'Khay 1', standard_time_minutes: 10, setup_time_minutes: 5, buffer_time_minutes: 2 },
+          { id: 2, code: 'C002', name: 'Khay 2', standard_time_minutes: 15, setup_time_minutes: 10, buffer_time_minutes: 5 }
+        ];
+        bomsData = [
+          { id: 1, model_id: 1, component_id: 1, quantity: 2, component_name: 'Khay 1', component_code: 'C001', standard_time_minutes: 10 },
+          { id: 2, model_id: 1, component_id: 2, quantity: 1, component_name: 'Khay 2', component_code: 'C002', standard_time_minutes: 15 }
+        ];
+        storage.set('models', modelsData);
+        storage.set('components', componentsData);
+        storage.set('boms', bomsData);
+      }
+
       setModels(modelsData);
       setComponents(componentsData);
       setPlans(plansData);
       setCapacity(capacityData);
+      setBoms(bomsData);
     } catch (error: any) {
-      console.error("Failed to fetch data", error);
+      console.error("Failed to load data", error);
       alert("Lỗi tải dữ liệu: " + error.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleAddModel = async (e: React.FormEvent) => {
+  const handleAddModel = (e: React.FormEvent) => {
     e.preventDefault();
-    console.log("Adding model:", newModel);
-    const res = await fetch('/api/models', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newModel)
-    });
-    if (res.ok) {
-      setNewModel({ code: '', name: '' });
-      fetchData();
-    } else {
-      const err = await res.json();
-      alert("Lỗi: " + err.error);
-    }
+    if (!newModel.code || !newModel.name) return;
+    const newId = models.length > 0 ? Math.max(...models.map(m => m.id)) + 1 : 1;
+    const modelToAdd = { ...newModel, id: newId };
+    const updatedModels = [...models, modelToAdd];
+    setModels(updatedModels);
+    storage.set('models', updatedModels);
+    setNewModel({ code: '', name: '' });
   };
 
-  const handleAddComponent = async (e: React.FormEvent) => {
+  const handleAddComponent = (e: React.FormEvent) => {
     e.preventDefault();
-    console.log("Adding component:", newComponent);
-    const res = await fetch('/api/components', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newComponent)
-    });
-    if (res.ok) {
-      setNewComponent({ code: '', name: '', standard_time_minutes: 0, setup_time_minutes: 0, buffer_time_minutes: 0 });
-      fetchData();
-    } else {
-      const err = await res.json();
-      alert("Lỗi: " + err.error);
-    }
+    if (!newComponent.code) return;
+    const newId = components.length > 0 ? Math.max(...components.map(c => c.id)) + 1 : 1;
+    const componentToAdd = { ...newComponent, id: newId };
+    const updatedComponents = [...components, componentToAdd];
+    setComponents(updatedComponents);
+    storage.set('components', updatedComponents);
+    setNewComponent({ code: '', name: '', standard_time_minutes: 0, setup_time_minutes: 0, buffer_time_minutes: 0 });
   };
 
-  const fetchRoadmap = async (planId: number) => {
-    console.log("Fetching roadmap for plan:", planId);
+  const fetchRoadmap = (planId: number) => {
     setViewingRoadmapId(planId);
-    const res = await fetch(`/api/plans/${planId}/roadmap`);
-    setSelectedPlanRoadmap(await res.json());
+    const plan = plans.find(p => p.id === planId);
+    if (!plan) return;
+
+    const modelBoms = boms.filter(b => b.model_id === plan.model_id);
+    let currentDate = new Date(plan.start_date);
+    
+    const roadmap: RoadmapItem[] = modelBoms.map((bom, index) => {
+      const comp = components.find(c => c.id === bom.component_id);
+      const leadtime = comp ? (comp.standard_time_minutes * bom.quantity * plan.quantity) + comp.setup_time_minutes + comp.buffer_time_minutes : 0;
+      
+      const start = new Date(currentDate);
+      const end = new Date(start);
+      const days = Math.ceil(leadtime / (capacity.workers * capacity.hours_per_day * 60));
+      end.setDate(end.getDate() + (days || 1));
+      
+      currentDate = new Date(end);
+
+      return {
+        id: index + 1,
+        plan_id: planId,
+        component_id: bom.component_id,
+        component_name: bom.component_name,
+        component_code: bom.component_code,
+        quantity: bom.quantity * plan.quantity,
+        start_date: start.toISOString().split('T')[0],
+        end_date: end.toISOString().split('T')[0],
+        leadtime_minutes: leadtime,
+        is_bottleneck: leadtime > 480
+      };
+    });
+    setSelectedPlanRoadmap(roadmap);
   };
 
-  const handleAddPlan = async (e: React.FormEvent) => {
+  const handleAddPlan = (e: React.FormEvent) => {
     e.preventDefault();
     const planData = editingPlan || newPlan;
-    console.log("Adding/Editing plan:", planData);
-    const url = editingPlan ? `/api/plans/${editingPlan.id}` : '/api/plans';
-    const method = editingPlan ? 'PUT' : 'POST';
+    if (!planData.model_id || !planData.quantity) return;
+
+    const model = models.find(m => m.id === Number(planData.model_id));
+    const modelBoms = boms.filter(b => b.model_id === Number(planData.model_id));
     
-    const res = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editingPlan || newPlan)
+    let totalMinutes = 0;
+    modelBoms.forEach(bom => {
+      const comp = components.find(c => c.id === bom.component_id);
+      if (comp) {
+        totalMinutes += (comp.standard_time_minutes * bom.quantity * planData.quantity) + comp.setup_time_minutes + comp.buffer_time_minutes;
+      }
     });
-    if (res.ok) {
-      setNewPlan({ model_id: 0, quantity: 0, start_date: '', deadline: '' });
-      setEditingPlan(null);
-      fetchData();
-      setActiveTab('dashboard');
+
+    const capacityMinutesPerDay = (capacity.workers || 1) * (capacity.hours_per_day || 1) * 60;
+    const daysNeeded = Math.ceil(totalMinutes / capacityMinutesPerDay);
+    
+    const startDate = new Date(planData.start_date);
+    const completionDate = new Date(startDate);
+    completionDate.setDate(completionDate.getDate() + (daysNeeded || 1));
+    
+    const deadlineDate = new Date(planData.deadline);
+    const gapMs = completionDate.getTime() - deadlineDate.getTime();
+    const gapHours = Math.max(0, gapMs / (1000 * 60 * 60));
+
+    const planToAdd: Plan = {
+      id: editingPlan ? editingPlan.id : (plans.length > 0 ? Math.max(...plans.map(p => p.id)) + 1 : 1),
+      model_id: Number(planData.model_id),
+      model_name: model?.name || 'Unknown',
+      model_code: model?.code || 'Unknown',
+      quantity: planData.quantity,
+      start_date: planData.start_date,
+      deadline: planData.deadline,
+      estimated_completion_date: completionDate.toISOString().split('T')[0],
+      gap_hours: gapHours,
+      status: gapHours > 0 ? 'Delayed' : 'On Track'
+    };
+
+    let updatedPlans;
+    if (editingPlan) {
+      updatedPlans = plans.map(p => p.id === editingPlan.id ? planToAdd : p);
     } else {
-      const err = await res.json();
-      alert(err.error);
+      updatedPlans = [...plans, planToAdd];
     }
+
+    setPlans(updatedPlans);
+    storage.set('plans', updatedPlans);
+    setNewPlan({ model_id: 0, quantity: 0, start_date: '', deadline: '' });
+    setEditingPlan(null);
+    setActiveTab('dashboard');
   };
 
-  const handleDeletePlan = async (id: number) => {
+  const handleDeletePlan = (id: number) => {
     if (!confirm('Bạn có chắc chắn muốn xóa kế hoạch này?')) return;
-    console.log("Deleting plan:", id);
-    await fetch(`/api/plans/${id}`, { method: 'DELETE' });
-    fetchData();
+    const updatedPlans = plans.filter(p => p.id !== id);
+    setPlans(updatedPlans);
+    storage.set('plans', updatedPlans);
   };
 
-  const handleEditModel = async (e: React.FormEvent) => {
+  const handleEditModel = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingModel) return;
-    console.log("Editing model:", editingModel);
-    const res = await fetch(`/api/models/${editingModel.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editingModel)
-    });
-    if (res.ok) {
-      setEditingModel(null);
-      fetchData();
-    } else {
-      const err = await res.json();
-      alert("Lỗi: " + err.error);
-    }
+    const updatedModels = models.map(m => m.id === editingModel.id ? editingModel : m);
+    setModels(updatedModels);
+    storage.set('models', updatedModels);
+    setEditingModel(null);
   };
 
-  const handleDeleteModel = async (id: number) => {
+  const handleDeleteModel = (id: number) => {
     if (!confirm('Xóa Model sẽ không xóa các kế hoạch liên quan nhưng có thể gây lỗi hiển thị. Bạn có chắc chắn?')) return;
-    console.log("Deleting model:", id);
-    await fetch(`/api/models/${id}`, { method: 'DELETE' });
-    fetchData();
+    const updatedModels = models.filter(m => m.id !== id);
+    setModels(updatedModels);
+    storage.set('models', updatedModels);
   };
 
-  const handleEditComponent = async (e: React.FormEvent) => {
+  const handleEditComponent = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingComponent) return;
-    console.log("Editing component:", editingComponent);
-    const res = await fetch(`/api/components/${editingComponent.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editingComponent)
-    });
-    if (res.ok) {
-      setEditingComponent(null);
-      fetchData();
-    } else {
-      const err = await res.json();
-      alert("Lỗi: " + err.error);
-    }
+    const updatedComponents = components.map(c => c.id === editingComponent.id ? editingComponent : c);
+    setComponents(updatedComponents);
+    storage.set('components', updatedComponents);
+    setEditingComponent(null);
   };
 
-  const handleDeleteComponent = async (id: number) => {
+  const handleDeleteComponent = (id: number) => {
     if (!confirm('Xóa linh kiện sẽ ảnh hưởng đến các BOM đang sử dụng nó. Tiếp tục?')) return;
-    console.log("Deleting component:", id);
-    await fetch(`/api/components/${id}`, { method: 'DELETE' });
-    fetchData();
+    const updatedComponents = components.filter(c => c.id !== id);
+    setComponents(updatedComponents);
+    storage.set('components', updatedComponents);
   };
 
-  const handleDeleteBOM = async (id: number) => {
+  const handleDeleteBOM = (id: number) => {
     if (!confirm('Xóa linh kiện này khỏi BOM?')) return;
-    console.log("Deleting BOM item:", id);
-    await fetch(`/api/bom/${id}`, { method: 'DELETE' });
-    fetchBOM(currentModelId);
+    const updatedBoms = boms.filter(b => b.id !== id);
+    setBoms(updatedBoms);
+    storage.set('boms', updatedBoms);
+    // Update selectedModelBOM for UI
+    setSelectedModelBOM(updatedBoms.filter(b => b.model_id === currentModelId));
   };
 
   const [selectedModelBOM, setSelectedModelBOM] = useState<BOMItem[]>([]);
   const [currentModelId, setCurrentModelId] = useState<number>(0);
 
-  const fetchBOM = async (modelId: number) => {
+  const fetchBOM = (modelId: number) => {
     if (!modelId) return;
-    console.log("Fetching BOM for model:", modelId);
     setCurrentModelId(modelId);
-    const res = await fetch(`/api/bom/${modelId}`);
-    setSelectedModelBOM(await res.json());
+    const modelBoms = boms.filter(b => b.model_id === modelId);
+    setSelectedModelBOM(modelBoms);
   };
 
-  const handleAddBOM = async (e: React.FormEvent) => {
+  const handleAddBOM = (e: React.FormEvent) => {
     e.preventDefault();
-    console.log("Adding BOM item:", newBOM);
-    await fetch('/api/bom', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newBOM)
-    });
-    fetchBOM(newBOM.model_id);
+    if (!newBOM.model_id || !newBOM.component_id) return;
+    const newId = boms.length > 0 ? Math.max(...boms.map(b => b.id)) + 1 : 1;
+    const comp = components.find(c => c.id === Number(newBOM.component_id));
+    
+    const bomToAdd: BOMItem = {
+      id: newId,
+      model_id: Number(newBOM.model_id),
+      component_id: Number(newBOM.component_id),
+      quantity: newBOM.quantity,
+      component_name: comp?.name || 'Unknown',
+      component_code: comp?.code || 'Unknown',
+      standard_time_minutes: comp?.standard_time_minutes || 0
+    };
+
+    const updatedBoms = [...boms, bomToAdd];
+    setBoms(updatedBoms);
+    storage.set('boms', updatedBoms);
+    setNewBOM({ model_id: 0, component_id: 0, quantity: 1 });
+    setSelectedModelBOM(updatedBoms.filter(b => b.model_id === Number(newBOM.model_id)));
   };
 
-  const updateCapacity = async (e: React.FormEvent) => {
+  const updateCapacity = (e: React.FormEvent) => {
     e.preventDefault();
-    console.log("Updating capacity:", capacity);
-    await fetch('/api/capacity', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(capacity)
+    storage.set('capacity', capacity);
+    alert('Đã cập nhật năng lực sản xuất');
+    
+    // Recalculate all plans
+    const updatedPlans = plans.map(plan => {
+      const modelBoms = boms.filter(b => b.model_id === plan.model_id);
+      let totalMinutes = 0;
+      modelBoms.forEach(bom => {
+        const comp = components.find(c => c.id === bom.component_id);
+        if (comp) {
+          totalMinutes += (comp.standard_time_minutes * bom.quantity * plan.quantity) + comp.setup_time_minutes + comp.buffer_time_minutes;
+        }
+      });
+
+      const capacityMinutesPerDay = (capacity.workers || 1) * (capacity.hours_per_day || 1) * 60;
+      const daysNeeded = Math.ceil(totalMinutes / capacityMinutesPerDay);
+      const startDate = new Date(plan.start_date);
+      const completionDate = new Date(startDate);
+      completionDate.setDate(completionDate.getDate() + (daysNeeded || 1));
+      const deadlineDate = new Date(plan.deadline);
+      const gapMs = completionDate.getTime() - deadlineDate.getTime();
+      const gapHours = Math.max(0, gapMs / (1000 * 60 * 60));
+
+      return {
+        ...plan,
+        estimated_completion_date: completionDate.toISOString().split('T')[0],
+        gap_hours: gapHours,
+        status: gapHours > 0 ? 'Delayed' : 'On Track'
+      };
     });
-    fetchData();
+    setPlans(updatedPlans);
+    storage.set('plans', updatedPlans);
   };
 
   const renderDashboard = () => {
-    console.log("Rendering Dashboard tab...");
     const totalPlans = plans.length;
     const delayedPlans = plans.filter(p => p.gap_hours > 0).length;
     const onTimePlans = totalPlans - delayedPlans;
@@ -548,10 +645,24 @@ export default function App() {
     );
   };
 
+  const handleResetData = () => {
+    if (!confirm('Bạn có chắc chắn muốn xóa TOÀN BỘ dữ liệu? Thao tác này không thể hoàn tác.')) return;
+    localStorage.clear();
+    window.location.reload();
+  };
+
   const renderMasterData = () => {
-    console.log("Rendering Master Data tab...");
     return (
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="space-y-6">
+        <div className="flex justify-end">
+          <button 
+            onClick={handleResetData}
+            className="px-4 py-2 bg-rose-50 text-rose-600 rounded-xl hover:bg-rose-100 transition-colors text-xs font-bold flex items-center gap-2"
+          >
+            <Trash2 className="w-4 h-4" /> Reset toàn bộ dữ liệu
+          </button>
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="space-y-6">
           <Card title="Quản lý Model" icon={Package}>
             <form onSubmit={handleAddModel} className="flex gap-2 mb-6">
@@ -827,11 +938,11 @@ export default function App() {
           </Card>
         </div>
       </div>
+    </div>
     );
   };
 
   const renderPlanning = () => {
-    console.log("Rendering Planning tab...");
     const isEditing = !!editingPlan;
     const planData = editingPlan || newPlan;
 
@@ -963,7 +1074,6 @@ export default function App() {
           <nav className="space-y-1">
             <button 
               onClick={() => {
-                console.log("Switching to dashboard tab");
                 setActiveTab('dashboard');
               }}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'dashboard' ? 'bg-indigo-50 text-indigo-600 font-semibold' : 'text-slate-500 hover:bg-slate-50'}`}
@@ -973,7 +1083,6 @@ export default function App() {
             </button>
             <button 
               onClick={() => {
-                console.log("Switching to planning tab");
                 setActiveTab('planning');
               }}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'planning' ? 'bg-indigo-50 text-indigo-600 font-semibold' : 'text-slate-500 hover:bg-slate-50'}`}
@@ -983,7 +1092,6 @@ export default function App() {
             </button>
             <button 
               onClick={() => {
-                console.log("Switching to masterdata tab");
                 setActiveTab('masterdata');
               }}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'masterdata' ? 'bg-indigo-50 text-indigo-600 font-semibold' : 'text-slate-500 hover:bg-slate-50'}`}
