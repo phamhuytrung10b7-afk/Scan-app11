@@ -644,7 +644,7 @@ export default function App() {
                     <p className="text-xs text-slate-500">{plan.quantity} PCS • {formatDateTime(plan.deadline)}</p>
                   </div>
                   {plan.gap_hours > 0 ? (
-                    <span className="px-2 py-1 rounded-full bg-rose-100 text-rose-600 text-[10px] font-bold uppercase">Trễ {Math.round(plan.gap_hours)}h</span>
+                    <span className="px-2 py-1 rounded-full bg-rose-100 text-rose-600 text-[10px] font-bold uppercase">Trễ {Math.floor(plan.gap_hours)}h {Math.floor((plan.gap_hours % 1) * 60)}m {Math.floor(((plan.gap_hours % 1) * 60 % 1) * 60)}s</span>
                   ) : (
                     <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-600 text-[10px] font-bold uppercase">Kịp</span>
                   )}
@@ -683,7 +683,7 @@ export default function App() {
                       {plan.gap_hours > 0 ? (
                         <div className="flex items-center gap-1.5 text-rose-600 font-medium text-sm">
                           <AlertCircle className="w-4 h-4" />
-                          Trễ {Math.round(plan.gap_hours)}h
+                          Trễ {Math.floor(plan.gap_hours)}h {Math.floor((plan.gap_hours % 1) * 60)}m {Math.floor(((plan.gap_hours % 1) * 60 % 1) * 60)}s
                         </div>
                       ) : (
                         <div className="flex items-center gap-1.5 text-emerald-600 font-medium text-sm">
