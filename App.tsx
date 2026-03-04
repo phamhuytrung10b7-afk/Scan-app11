@@ -221,7 +221,10 @@ export default function App() {
       const breakEnd = new Date(current);
       breakEnd.setHours(bEH, bEM, 0, 0);
 
-      if (current < shiftStart) current = shiftStart;
+      if (current < shiftStart) {
+        current = new Date(shiftStart);
+        continue;
+      }
       
       if (current >= shiftEnd) {
         current.setDate(current.getDate() + 1);
@@ -230,7 +233,7 @@ export default function App() {
       }
 
       if (current >= breakStart && current < breakEnd) {
-        current = breakEnd;
+        current = new Date(breakEnd);
         continue;
       }
 
@@ -271,17 +274,19 @@ export default function App() {
       const breakEnd = new Date(current);
       breakEnd.setHours(bEH, bEM, 0, 0);
 
-      if (current > breakEnd && current <= shiftEnd) {
-        // In shift after break
-      } else if (current > breakStart && current <= breakEnd) {
-        current = breakStart;
+      if (current > shiftEnd) {
+        current = new Date(shiftEnd);
         continue;
-      } else if (current > shiftStart && current <= breakStart) {
-        // In shift before break
-      } else {
-        // Outside shift
+      }
+      
+      if (current <= shiftStart) {
         current.setDate(current.getDate() - 1);
         current.setHours(eH, eM, 0, 0);
+        continue;
+      }
+
+      if (current > breakStart && current <= breakEnd) {
+        current = new Date(breakStart);
         continue;
       }
 
