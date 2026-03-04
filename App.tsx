@@ -41,7 +41,7 @@ interface Component {
   id: number;
   code: string;
   name: string;
-  standard_time_minutes: number;
+  standard_time_seconds: number;
 }
 
 interface RoadmapItem {
@@ -53,7 +53,7 @@ interface RoadmapItem {
   quantity: number;
   start_time: string;
   end_time: string;
-  leadtime_minutes: number;
+  leadtime_seconds: number;
   is_bottleneck: boolean;
 }
 
@@ -64,7 +64,7 @@ interface BOMItem {
   quantity: number;
   component_name: string;
   component_code: string;
-  standard_time_minutes: number;
+  standard_time_seconds: number;
 }
 
 interface Capacity {
@@ -145,7 +145,7 @@ export default function App() {
 
   // Form States
   const [newModel, setNewModel] = useState({ code: '', name: '' });
-  const [newComponent, setNewComponent] = useState({ code: '', name: '', standard_time_minutes: 0 });
+  const [newComponent, setNewComponent] = useState({ code: '', name: '', standard_time_seconds: 0 });
   const [newPlan, setNewPlan] = useState({ model_id: 0, quantity: 0, start_time: '', deadline: '' });
   const [newBOM, setNewBOM] = useState({ model_id: 0, component_id: 0, quantity: 1 });
 
@@ -195,8 +195,8 @@ export default function App() {
     });
   };
 
-  const addProductionTime = (startDate: Date, durationMinutes: number, cap: Capacity): Date => {
-    let remainingMinutes = durationMinutes / (cap.workers || 1);
+  const addProductionTime = (startDate: Date, durationSeconds: number, cap: Capacity): Date => {
+    let remainingSeconds = durationSeconds / (cap.workers || 1);
     let current = new Date(startDate);
 
     const [sH, sM] = cap.shift_start.split(':').map(Number);
@@ -204,7 +204,7 @@ export default function App() {
     const [bSH, bSM] = cap.break_start.split(':').map(Number);
     const [bEH, bEM] = cap.break_end.split(':').map(Number);
 
-    while (remainingMinutes > 0) {
+    while (remainingSeconds > 0) {
       // Skip Sundays
       if (current.getDay() === 0) {
         current.setDate(current.getDate() + 1);
@@ -237,10 +237,10 @@ export default function App() {
       let nextBoundary = shiftEnd;
       if (current < breakStart) nextBoundary = breakStart;
 
-      const availableMinutes = (nextBoundary.getTime() - current.getTime()) / (1000 * 60);
-      const toAdd = Math.min(remainingMinutes, availableMinutes);
-      current = new Date(current.getTime() + toAdd * 60 * 1000);
-      remainingMinutes -= toAdd;
+      const availableSeconds = (nextBoundary.getTime() - current.getTime()) / 1000;
+      const toAdd = Math.min(remainingSeconds, availableSeconds);
+      current = new Date(current.getTime() + toAdd * 1000);
+      remainingSeconds -= toAdd;
     }
     return current;
   };
@@ -267,12 +267,12 @@ export default function App() {
           { id: 2, code: 'M002', name: 'Sản phẩm B' }
         ];
         componentsData = [
-          { id: 1, code: 'C001', name: 'Khay 1', standard_time_minutes: 10 },
-          { id: 2, code: 'C002', name: 'Khay 2', standard_time_minutes: 15 }
+          { id: 1, code: 'C001', name: 'Khay 1', standard_time_seconds: 600 },
+          { id: 2, code: 'C002', name: 'Khay 2', standard_time_seconds: 900 }
         ];
         bomsData = [
-          { id: 1, model_id: 1, component_id: 1, quantity: 2, component_name: 'Khay 1', component_code: 'C001', standard_time_minutes: 10 },
-          { id: 2, model_id: 1, component_id: 2, quantity: 1, component_name: 'Khay 2', component_code: 'C002', standard_time_minutes: 15 }
+          { id: 1, model_id: 1, component_id: 1, quantity: 2, component_name: 'Khay 1', component_code: 'C001', standard_time_seconds: 600 },
+          { id: 2, model_id: 1, component_id: 2, quantity: 1, component_name: 'Khay 2', component_code: 'C002', standard_time_seconds: 900 }
         ];
         storage.set('models', modelsData);
         storage.set('components', componentsData);
@@ -311,7 +311,7 @@ export default function App() {
     const updatedComponents = [...components, componentToAdd];
     setComponents(updatedComponents);
     storage.set('components', updatedComponents);
-    setNewComponent({ code: '', name: '', standard_time_minutes: 0, setup_time_minutes: 0, buffer_time_minutes: 0 });
+    setNewComponent({ code: '', name: '', standard_time_seconds: 0 });
   };
 
   const fetchRoadmap = (planId: number) => {
@@ -321,10 +321,14 @@ export default function App() {
 
     const modelBoms = boms.filter(b => b.model_id === plan.model_id);
     let currentStartTime = new Date(plan.start_time);
+    if (isNaN(currentStartTime.getTime())) {
+      console.error("Invalid start time for plan:", plan);
+      return;
+    }
     
     const roadmap: RoadmapItem[] = modelBoms.map((bom, index) => {
       const comp = components.find(c => c.id === bom.component_id);
-      const leadtime = comp ? (comp.standard_time_minutes * bom.quantity * plan.quantity) : 0;
+      const leadtime = comp ? (comp.standard_time_seconds * bom.quantity * plan.quantity) : 0;
       
       const start = new Date(currentStartTime);
       const end = addProductionTime(start, leadtime, capacity);
@@ -340,8 +344,8 @@ export default function App() {
         quantity: bom.quantity * plan.quantity,
         start_time: start.toISOString(),
         end_time: end.toISOString(),
-        leadtime_minutes: leadtime,
-        is_bottleneck: leadtime > 480
+        leadtime_seconds: leadtime,
+        is_bottleneck: leadtime > 28800 // 8 hours in seconds
       };
     });
     setSelectedPlanRoadmap(roadmap);
@@ -355,16 +359,20 @@ export default function App() {
     const model = models.find(m => m.id === Number(planData.model_id));
     const modelBoms = boms.filter(b => b.model_id === Number(planData.model_id));
     
-    let totalMinutes = 0;
+    let totalSeconds = 0;
     modelBoms.forEach(bom => {
       const comp = components.find(c => c.id === bom.component_id);
       if (comp) {
-        totalMinutes += (comp.standard_time_minutes * bom.quantity * planData.quantity);
+        totalSeconds += (comp.standard_time_seconds * bom.quantity * planData.quantity);
       }
     });
 
     const startTime = new Date(planData.start_time);
-    const completionTime = addProductionTime(startTime, totalMinutes, capacity);
+    if (isNaN(startTime.getTime())) {
+      alert("Thời gian bắt đầu không hợp lệ");
+      return;
+    }
+    const completionTime = addProductionTime(startTime, totalSeconds, capacity);
     
     const deadlineTime = new Date(planData.deadline);
     const gapMs = completionTime.getTime() - deadlineTime.getTime();
@@ -468,7 +476,7 @@ export default function App() {
       quantity: newBOM.quantity,
       component_name: comp?.name || 'Unknown',
       component_code: comp?.code || 'Unknown',
-      standard_time_minutes: comp?.standard_time_minutes || 0
+      standard_time_seconds: comp?.standard_time_seconds || 0
     };
 
     const updatedBoms = [...boms, bomToAdd];
@@ -486,16 +494,19 @@ export default function App() {
     // Recalculate all plans
     const updatedPlans = plans.map(plan => {
       const modelBoms = boms.filter(b => b.model_id === plan.model_id);
-      let totalMinutes = 0;
+      let totalSeconds = 0;
       modelBoms.forEach(bom => {
         const comp = components.find(c => c.id === bom.component_id);
         if (comp) {
-          totalMinutes += (comp.standard_time_minutes * bom.quantity * plan.quantity);
+          totalSeconds += (comp.standard_time_seconds * bom.quantity * plan.quantity);
         }
       });
 
       const startTime = new Date(plan.start_time);
-      const completionTime = addProductionTime(startTime, totalMinutes, capacity);
+      if (isNaN(startTime.getTime())) {
+        return plan;
+      }
+      const completionTime = addProductionTime(startTime, totalSeconds, capacity);
       
       const deadlineTime = new Date(plan.deadline);
       const gapMs = completionTime.getTime() - deadlineTime.getTime();
@@ -813,10 +824,11 @@ export default function App() {
               <div className="grid grid-cols-3 gap-2">
                 <input 
                   type="number" 
-                  placeholder="Chuẩn (phút)" 
+                  step="any"
+                  placeholder="Chuẩn (giây)" 
                   className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
-                  value={newComponent.standard_time_minutes === 0 ? '0' : (newComponent.standard_time_minutes || '')}
-                  onChange={e => setNewComponent({...newComponent, standard_time_minutes: e.target.value === '' ? 0 : parseFloat(e.target.value)})}
+                  value={newComponent.standard_time_seconds === 0 ? '0' : (newComponent.standard_time_seconds || '')}
+                  onChange={e => setNewComponent({...newComponent, standard_time_seconds: e.target.value === '' ? 0 : parseFloat(e.target.value)})}
                   required
                 />
               </div>
@@ -846,9 +858,10 @@ export default function App() {
                       <div className="grid grid-cols-1 gap-2 items-center">
                         <input 
                           type="number" 
+                          step="any"
                           className="w-full px-2 py-1 rounded border text-sm"
-                          value={editingComponent.standard_time_minutes === 0 ? '0' : (editingComponent.standard_time_minutes || '')}
-                          onChange={e => setEditingComponent({...editingComponent, standard_time_minutes: e.target.value === '' ? 0 : parseFloat(e.target.value)})}
+                          value={editingComponent.standard_time_seconds === 0 ? '0' : (editingComponent.standard_time_seconds || '')}
+                          onChange={e => setEditingComponent({...editingComponent, standard_time_seconds: e.target.value === '' ? 0 : parseFloat(e.target.value)})}
                         />
                       </div>
                       <div className="flex justify-end gap-2">
@@ -860,7 +873,7 @@ export default function App() {
                     <>
                       <div>
                         <p className="text-sm font-semibold text-slate-800">{c.name}</p>
-                        <p className="text-[10px] text-slate-400">{c.code} • Chuẩn: {c.standard_time_minutes}m</p>
+                        <p className="text-[10px] text-slate-400">{c.code} • Chuẩn: {c.standard_time_seconds}s</p>
                       </div>
                       <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button onClick={() => setEditingComponent(c)} className="p-1 text-slate-400 hover:text-indigo-600"><Edit2 className="w-3.5 h-3.5" /></button>
@@ -927,7 +940,7 @@ export default function App() {
                       <div className="flex items-center gap-3">
                         <div className="text-right">
                           <p className="text-sm font-bold text-indigo-600">x{item.quantity}</p>
-                          <p className="text-[10px] text-slate-400">{item.standard_time_minutes}m/đv</p>
+                          <p className="text-[10px] text-slate-400">{item.standard_time_seconds}s/đv</p>
                         </div>
                         <button 
                           onClick={() => handleDeleteBOM(item.id)}
