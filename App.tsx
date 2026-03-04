@@ -458,7 +458,7 @@ export default function App() {
       deadline: planData.deadline,
       estimated_completion_time: completionTime.toISOString(),
       gap_hours: gapHours,
-      status: gapHours > 0 ? 'Delayed' : 'On Track'
+      status: gapHours > 0 ? `Delayed ${Math.floor(gapHours)}h ${Math.floor((gapHours % 1) * 60)}m ${Math.floor(((gapHours % 1) * 60 % 1) * 60)}s` : 'On Track'
     };
 
     let updatedPlans;
@@ -586,7 +586,7 @@ export default function App() {
         ...plan,
         estimated_completion_time: completionTime.toISOString(),
         gap_hours: gapHours,
-        status: gapHours > 0 ? 'Delayed' : 'On Track'
+        status: gapHours > 0 ? `Delayed ${Math.floor(gapHours)}h ${Math.floor((gapHours % 1) * 60)}m ${Math.floor(((gapHours % 1) * 60 % 1) * 60)}s` : 'On Track'
       };
     });
     setPlans(updatedPlans);
