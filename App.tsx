@@ -205,38 +205,48 @@ export default function App() {
     const [bSH, bSM] = cap.break_start.split(':').map(Number);
     const [bEH, bEM] = cap.break_end.split(':').map(Number);
 
-    while (remainingSeconds > 0) {
-      // Skip Sundays
-      if (current.getDay() === 0) {
-        current.setDate(current.getDate() + 1);
-        current.setHours(sH, sM, 0, 0);
-        continue;
-      }
+    const jumpToWorkingTime = (date: Date): Date => {
+      let d = new Date(date);
+      let changed = true;
+      let safety = 0;
+      while (changed && safety < 10) {
+        safety++;
+        changed = false;
+        // Skip Sundays
+        if (d.getDay() === 0) {
+          d.setDate(d.getDate() + 1);
+          d.setHours(sH, sM, 0, 0);
+          changed = true;
+          continue;
+        }
 
-      const shiftStart = new Date(current);
-      shiftStart.setHours(sH, sM, 0, 0);
+        const sStart = new Date(d); sStart.setHours(sH, sM, 0, 0);
+        const sEnd = new Date(d); sEnd.setHours(eH, eM, 0, 0);
+        const bStart = new Date(d); bStart.setHours(bSH, bSM, 0, 0);
+        const bEnd = new Date(d); bEnd.setHours(bEH, bEM, 0, 0);
+
+        if (d < sStart) {
+          d = sStart;
+          changed = true;
+        } else if (d >= sEnd) {
+          d.setDate(d.getDate() + 1);
+          d.setHours(sH, sM, 0, 0);
+          changed = true;
+        } else if (d >= bStart && d < bEnd) {
+          d = bEnd;
+          changed = true;
+        }
+      }
+      return d;
+    };
+
+    current = jumpToWorkingTime(current);
+
+    while (remainingSeconds > 0) {
       const shiftEnd = new Date(current);
       shiftEnd.setHours(eH, eM, 0, 0);
       const breakStart = new Date(current);
       breakStart.setHours(bSH, bSM, 0, 0);
-      const breakEnd = new Date(current);
-      breakEnd.setHours(bEH, bEM, 0, 0);
-
-      if (current < shiftStart) {
-        current = new Date(shiftStart);
-        continue;
-      }
-      
-      if (current >= shiftEnd) {
-        current.setDate(current.getDate() + 1);
-        current.setHours(sH, sM, 0, 0);
-        continue;
-      }
-
-      if (current >= breakStart && current < breakEnd) {
-        current = new Date(breakEnd);
-        continue;
-      }
 
       let nextBoundary = shiftEnd;
       if (current < breakStart) nextBoundary = breakStart;
@@ -245,6 +255,10 @@ export default function App() {
       const toAdd = Math.min(remainingSeconds, availableSeconds);
       current = new Date(current.getTime() + toAdd * 1000);
       remainingSeconds -= toAdd;
+
+      if (remainingSeconds > 0) {
+        current = jumpToWorkingTime(current);
+      }
     }
     return current;
   };
@@ -258,38 +272,48 @@ export default function App() {
     const [bSH, bSM] = cap.break_start.split(':').map(Number);
     const [bEH, bEM] = cap.break_end.split(':').map(Number);
 
-    while (remainingSeconds > 0) {
-      // Skip Sundays
-      if (current.getDay() === 0) {
-        current.setDate(current.getDate() - 1);
-        current.setHours(eH, eM, 0, 0);
-        continue;
-      }
+    const jumpBackToWorkingTime = (date: Date): Date => {
+      let d = new Date(date);
+      let changed = true;
+      let safety = 0;
+      while (changed && safety < 10) {
+        safety++;
+        changed = false;
+        // Skip Sundays
+        if (d.getDay() === 0) {
+          d.setDate(d.getDate() - 1);
+          d.setHours(eH, eM, 0, 0);
+          changed = true;
+          continue;
+        }
 
+        const sStart = new Date(d); sStart.setHours(sH, sM, 0, 0);
+        const sEnd = new Date(d); sEnd.setHours(eH, eM, 0, 0);
+        const bStart = new Date(d); bStart.setHours(bSH, bSM, 0, 0);
+        const bEnd = new Date(d); bEnd.setHours(bEH, bEM, 0, 0);
+
+        if (d > sEnd) {
+          d = sEnd;
+          changed = true;
+        } else if (d <= sStart) {
+          d.setDate(d.getDate() - 1);
+          d.setHours(eH, eM, 0, 0);
+          changed = true;
+        } else if (d > bStart && d <= bEnd) {
+          d = bStart;
+          changed = true;
+        }
+      }
+      return d;
+    };
+
+    current = jumpBackToWorkingTime(current);
+
+    while (remainingSeconds > 0) {
       const shiftStart = new Date(current);
       shiftStart.setHours(sH, sM, 0, 0);
-      const shiftEnd = new Date(current);
-      shiftEnd.setHours(eH, eM, 0, 0);
-      const breakStart = new Date(current);
-      breakStart.setHours(bSH, bSM, 0, 0);
       const breakEnd = new Date(current);
       breakEnd.setHours(bEH, bEM, 0, 0);
-
-      if (current > shiftEnd) {
-        current = new Date(shiftEnd);
-        continue;
-      }
-      
-      if (current <= shiftStart) {
-        current.setDate(current.getDate() - 1);
-        current.setHours(eH, eM, 0, 0);
-        continue;
-      }
-
-      if (current > breakStart && current <= breakEnd) {
-        current = new Date(breakStart);
-        continue;
-      }
 
       let prevBoundary = shiftStart;
       if (current > breakEnd) prevBoundary = breakEnd;
@@ -298,6 +322,10 @@ export default function App() {
       const toSubtract = Math.min(remainingSeconds, availableSeconds);
       current = new Date(current.getTime() - toSubtract * 1000);
       remainingSeconds -= toSubtract;
+
+      if (remainingSeconds > 0) {
+        current = jumpBackToWorkingTime(current);
+      }
     }
     return current;
   };
@@ -395,7 +423,8 @@ export default function App() {
     const roadmap: RoadmapItem[] = sortedBoms.map((item, index) => {
       const { bom, leadtime } = item;
       
-      const start = new Date(currentStartTime);
+      // Ensure start time is within working hours
+      const start = addProductionTime(new Date(currentStartTime), 0, capacity);
       const end = addProductionTime(start, leadtime, capacity);
       
       currentStartTime = new Date(end);
@@ -432,11 +461,12 @@ export default function App() {
       }
     });
 
-    const startTime = new Date(planData.start_time);
-    if (isNaN(startTime.getTime())) {
+    const startTimeInput = new Date(planData.start_time);
+    if (isNaN(startTimeInput.getTime())) {
       alert("Thời gian bắt đầu không hợp lệ");
       return;
     }
+    const startTime = addProductionTime(startTimeInput, 0, capacity);
     
     const completionTime = addProductionTime(startTime, totalSeconds, capacity);
     
@@ -459,7 +489,7 @@ export default function App() {
       model_name: model?.name || 'Unknown',
       model_code: model?.code || 'Unknown',
       quantity: planData.quantity,
-      start_time: planData.start_time,
+      start_time: startTime.toISOString(),
       deadline: planData.deadline,
       estimated_completion_time: completionTime.toISOString(),
       gap_hours: gapHours,
@@ -577,10 +607,11 @@ export default function App() {
         }
       });
 
-      const startTime = new Date(plan.start_time);
-      if (isNaN(startTime.getTime())) {
+      const startTimeInput = new Date(plan.start_time);
+      if (isNaN(startTimeInput.getTime())) {
         return plan;
       }
+      const startTime = addProductionTime(startTimeInput, 0, capacity);
       const completionTime = addProductionTime(startTime, totalSeconds, capacity);
       
       const deadlineTime = new Date(plan.deadline);
@@ -593,6 +624,7 @@ export default function App() {
 
       return {
         ...plan,
+        start_time: startTime.toISOString(),
         estimated_completion_time: completionTime.toISOString(),
         gap_hours: gapHours,
         status: statusText
@@ -600,6 +632,13 @@ export default function App() {
     });
     setPlans(updatedPlans);
     storage.set('plans', updatedPlans);
+  };
+
+  const formatDuration = (seconds: number) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${h}h ${m}m ${s}s`;
   };
 
   const renderDashboard = () => {
@@ -774,14 +813,15 @@ export default function App() {
                         </div>
 
                         <div className="mt-4 pt-4 border-t border-slate-100 flex justify-between items-center">
-                          <p className="text-xs text-slate-500">
-                            Leadtime: <span className="font-bold text-slate-700">{Math.round(item.leadtime_seconds)} giây</span>
-                          </p>
-                          <div className="h-1.5 w-24 bg-slate-100 rounded-full overflow-hidden">
-                            <div 
-                              className={`h-full rounded-full ${item.is_bottleneck ? 'bg-amber-500' : 'bg-indigo-500'}`} 
-                              style={{ width: '100%' }} 
-                            />
+                          <div className="space-y-1">
+                            <p className="text-[10px] text-slate-400 uppercase font-bold">Nội dung công việc</p>
+                            <p className="text-xs font-bold text-slate-700">{formatDuration(item.leadtime_seconds)}</p>
+                          </div>
+                          <div className="text-right space-y-1">
+                            <p className="text-[10px] text-slate-400 uppercase font-bold">Thời gian thực tế</p>
+                            <p className="text-xs font-bold text-indigo-600">
+                              {formatDuration((new Date(item.end_time).getTime() - new Date(item.start_time).getTime()) / 1000)}
+                            </p>
                           </div>
                         </div>
                       </div>
