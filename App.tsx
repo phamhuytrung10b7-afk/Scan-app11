@@ -191,7 +191,8 @@ export default function App() {
       month: '2-digit',
       year: 'numeric',
       hour: '2-digit',
-      minute: '2-digit'
+      minute: '2-digit',
+      second: '2-digit'
     });
   };
 
@@ -384,23 +385,23 @@ export default function App() {
       return { bom, leadtime };
     }).sort((a, b) => b.leadtime - a.leadtime);
 
-    // 2. Forward scheduling
-    let currentStartTime = new Date(plan.start_time);
-    if (isNaN(currentStartTime.getTime())) {
-      console.error("Invalid start time for plan:", plan);
+    // 2. Backward scheduling from Deadline
+    let currentEndTime = new Date(plan.deadline);
+    if (isNaN(currentEndTime.getTime())) {
+      console.error("Invalid deadline for plan:", plan);
       return;
     }
     
-    const roadmap: RoadmapItem[] = sortedBoms.map((item, index) => {
+    const roadmap: RoadmapItem[] = [...sortedBoms].reverse().map((item, index) => {
       const { bom, leadtime } = item;
       
-      const start = new Date(currentStartTime);
-      const end = addProductionTime(start, leadtime, capacity);
+      const end = new Date(currentEndTime);
+      const start = subtractProductionTime(end, leadtime, capacity);
       
-      currentStartTime = new Date(end);
+      currentEndTime = new Date(start);
 
       return {
-        id: index + 1,
+        id: sortedBoms.length - index,
         plan_id: planId,
         component_id: bom.component_id,
         component_name: bom.component_name,
@@ -409,10 +410,10 @@ export default function App() {
         start_time: start.toISOString(),
         end_time: end.toISOString(),
         leadtime_seconds: leadtime,
-        is_bottleneck: leadtime > 28800 // 8 hours in seconds
+        is_bottleneck: (leadtime / (capacity.workers || 1)) > 28800 // 8 hours wall-clock
       };
     });
-    setSelectedPlanRoadmap(roadmap);
+    setSelectedPlanRoadmap(roadmap.reverse());
   };
 
   const handleAddPlan = (e: React.FormEvent) => {
