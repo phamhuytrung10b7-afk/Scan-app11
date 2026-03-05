@@ -385,23 +385,23 @@ export default function App() {
       return { bom, leadtime };
     }).sort((a, b) => b.leadtime - a.leadtime);
 
-    // 2. Backward scheduling from Deadline
-    let currentEndTime = new Date(plan.deadline);
-    if (isNaN(currentEndTime.getTime())) {
-      console.error("Invalid deadline for plan:", plan);
+    // 2. Forward scheduling from Start Time
+    let currentStartTime = new Date(plan.start_time);
+    if (isNaN(currentStartTime.getTime())) {
+      console.error("Invalid start time for plan:", plan);
       return;
     }
     
-    const roadmap: RoadmapItem[] = [...sortedBoms].reverse().map((item, index) => {
+    const roadmap: RoadmapItem[] = sortedBoms.map((item, index) => {
       const { bom, leadtime } = item;
       
-      const end = new Date(currentEndTime);
-      const start = subtractProductionTime(end, leadtime, capacity);
+      const start = new Date(currentStartTime);
+      const end = addProductionTime(start, leadtime, capacity);
       
-      currentEndTime = new Date(start);
+      currentStartTime = new Date(end);
 
       return {
-        id: sortedBoms.length - index,
+        id: index + 1,
         plan_id: planId,
         component_id: bom.component_id,
         component_name: bom.component_name,
@@ -413,7 +413,7 @@ export default function App() {
         is_bottleneck: (leadtime / (capacity.workers || 1)) > 28800 // 8 hours wall-clock
       };
     });
-    setSelectedPlanRoadmap(roadmap.reverse());
+    setSelectedPlanRoadmap(roadmap);
   };
 
   const handleAddPlan = (e: React.FormEvent) => {
@@ -447,7 +447,11 @@ export default function App() {
     }
     
     const gapMs = completionTime.getTime() - deadlineTime.getTime();
-    const gapHours = Math.max(0, gapMs / (1000 * 60 * 60));
+    const gapHours = gapMs / (1000 * 60 * 60);
+    const absGapHours = Math.abs(gapHours);
+    const statusText = gapHours > 0 
+      ? `Delayed ${Math.floor(absGapHours)}h ${Math.floor((absGapHours % 1) * 60)}m ${Math.floor(((absGapHours % 1) * 60 % 1) * 60)}s`
+      : `Early ${Math.floor(absGapHours)}h ${Math.floor((absGapHours % 1) * 60)}m ${Math.floor(((absGapHours % 1) * 60 % 1) * 60)}s`;
 
     const planToAdd: Plan = {
       id: editingPlan ? editingPlan.id : (plans.length > 0 ? Math.max(...plans.map(p => p.id)) + 1 : 1),
@@ -459,7 +463,7 @@ export default function App() {
       deadline: planData.deadline,
       estimated_completion_time: completionTime.toISOString(),
       gap_hours: gapHours,
-      status: gapHours > 0 ? `Delayed ${Math.floor(gapHours)}h ${Math.floor((gapHours % 1) * 60)}m ${Math.floor(((gapHours % 1) * 60 % 1) * 60)}s` : 'On Track'
+      status: statusText
     };
 
     let updatedPlans;
@@ -581,13 +585,17 @@ export default function App() {
       
       const deadlineTime = new Date(plan.deadline);
       const gapMs = completionTime.getTime() - deadlineTime.getTime();
-      const gapHours = Math.max(0, gapMs / (1000 * 60 * 60));
+      const gapHours = gapMs / (1000 * 60 * 60);
+      const absGapHours = Math.abs(gapHours);
+      const statusText = gapHours > 0 
+        ? `Delayed ${Math.floor(absGapHours)}h ${Math.floor((absGapHours % 1) * 60)}m ${Math.floor(((absGapHours % 1) * 60 % 1) * 60)}s`
+        : `Early ${Math.floor(absGapHours)}h ${Math.floor((absGapHours % 1) * 60)}m ${Math.floor(((absGapHours % 1) * 60 % 1) * 60)}s`;
 
       return {
         ...plan,
         estimated_completion_time: completionTime.toISOString(),
         gap_hours: gapHours,
-        status: gapHours > 0 ? `Delayed ${Math.floor(gapHours)}h ${Math.floor((gapHours % 1) * 60)}m ${Math.floor(((gapHours % 1) * 60 % 1) * 60)}s` : 'On Track'
+        status: statusText
       };
     });
     setPlans(updatedPlans);
@@ -756,7 +764,7 @@ export default function App() {
                         
                         <div className="grid grid-cols-2 gap-4 text-sm">
                           <div>
-                            <p className="text-[10px] text-slate-400 uppercase font-bold">Bắt đầu muộn nhất</p>
+                            <p className="text-[10px] text-slate-400 uppercase font-bold">Dự kiến bắt đầu</p>
                             <p className="font-semibold text-slate-700">{formatDateTime(item.start_time)}</p>
                           </div>
                           <div>
